@@ -11,7 +11,7 @@ Issues:
 const release = "2023_1_8";
 const quranTextFp = "resources/quran-simple.txt";
 const dataFolder = "data";
-const allStatsFp = `${dataFolder}/_quran_data_stats_all_${release}.tsv`;
+const allStatsFp = `${dataFolder}/@quran_data_stats_all_${release}.tsv`;
 
 // buttons:
 const resetBtn = document.getElementById("resetFiltersBtn");
@@ -304,7 +304,7 @@ function buildTable(data){
 function buildTableViz(){
     removeAllGraphs()
     if (typeof ngrams === 'undefined') {
-        const fp =  `${dataFolder}/_ngrams_count_${release}.csv`;
+        const fp =  `${dataFolder}/@ngrams_count_${release}.csv`;
             d3.csv(fp).then(data => {
                 data.forEach(d => {
                     d.start_token = +d.start_token;
