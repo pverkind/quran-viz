@@ -268,11 +268,14 @@ function getAllSuras(start, end){
     let repeated = repeatedNgramsD[suraAyaTok+"."+(end-start)] || [];
     console.log(repeated);
     let suraAya = suraAyaTok.split(".").slice(0,2).join(".");
-    //suraAya = `<span title="${ayaTextD[suraAya]}">${suraAya}</span>`;
-    suraAya = `<span title="test">${suraAya}</span>`;
+    suraAya = `<span title="${ayaTextD[suraAya]}">${suraAya}</span>`;
     if (repeated.length > 0){
-        suraAya += `<br>(and ${repeated.length} other verses)`;
+        let nVerses = (repeated.length == 1) ? "1 other verse" : `${repeated.length} other verses`; 
+        // keep only the sura and aya number for the repeats:
+        repeated = repeated.map(s => s.split(".").slice(0,2).join("."));
+        suraAya += `<br>(and <span title="${repeated.join(', '}">${nVerses}</span>)`;
     }
+    
     return suraAya;
 }
 
