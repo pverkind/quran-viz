@@ -94,10 +94,10 @@ function updateVisuals() {
     if (suraVizBtn.checked) {
         createScatterPlot("#scatter1", filteredData, "sura", "count", "Suras", null, 400);
         if (suraMin == suraMax){
-            createScatterPlot("#scatter2", filteredData, "aya", "count", "Ayas", suraMin, 400);
+            createScatterPlot("#scatter2", filteredData, "aya", "count", "Verses", suraMin, 400);
         }
     } else if (ayaVizBtn.checked){
-        createScatterPlot("#scatter1", filteredData, "sura_aya", "count", "All Ayas", null, 800);
+        createScatterPlot("#scatter1", filteredData, "sura_aya", "count", "All Verses", null, 800);
     } else if (tableVizBtn.checked){
         buildTableViz();
     }
@@ -202,8 +202,8 @@ function createScatterPlot(container, data, xVar, yVar, title, sura, width) {
             });
     
     // add the title to the graph:
-    if (title == "Ayas") {
-        title = "Ayas in sura "+sura;
+    if (title == "Verses") {
+        title = "Verses in sura "+sura;
     }
     svg.append("text")
         .attr("x", width / 2)
@@ -217,7 +217,7 @@ function filterScatter2(clickedDotD, qdata) {
     console.log(clickedDotD);
     d3.select("#scatter2 svg").remove();
     const filteredData = qdata.filter(d => d.sura == clickedDotD.sura);
-    createScatterPlot("#scatter2", filteredData, "aya", "count", "Ayas", clickedDotD.sura, 400);
+    createScatterPlot("#scatter2", filteredData, "aya", "count", "Verses", clickedDotD.sura, 400);
 }
 
 function buildSuraLevelViz(){
@@ -227,7 +227,7 @@ function buildSuraLevelViz(){
 
 function buildAyaLevelViz() {
     removeAllGraphs()
-    createScatterPlot("#scatter1", qdata, "sura_aya", "count", "All Ayas", null, 800);
+    createScatterPlot("#scatter1", qdata, "sura_aya", "count", "All Verses", null, 800);
 }
 
 function filterNgrams(data) {
@@ -268,7 +268,7 @@ function getAllSuras(start, end){
     let repeated = repeatedNgramsD[suraAyaTok+"."+(end-start)] || [];
     let suraAya = suraAyaTok.split(".").slice(0,2).join(".");
     if (repeated.length > 0){
-        suraAya += `<br>(and ${repeated.length} other ayas)`;
+        suraAya += `<br>(and ${repeated.length} other verses)`;
     }
     return suraAya;
 }
@@ -290,7 +290,7 @@ function buildTable(data){
     // build the caption:
     let caption = `<p>Displaying the 300 most frequent quotations (out of ${rolled.length} that agree with the filters):</p>`
     // build the table html: 
-    let table = '<table dir="rtl"><tr><th>Quoted Quran text</th><th>Aya</th><th>frequency</th></tr>';
+    let table = '<table dir="rtl"><tr><th>Quoted Quran text</th><th>Verse</th><th>frequency</th></tr>';
     top.forEach(arr => {
         table += "<tr>";
         arr.forEach(el => table += `<td>${el}</td>`);
@@ -401,7 +401,7 @@ d3.dsv("\t", allStatsFp).then(function(data) {
     // calculate the number of times the most frequently reused aya is used 
     // (to set the maximum value on the Y axis to the same value for each aya) 
     maxAyaY = calculateLargestCount(qdata);
-    console.log("Most frequently reused aya: reused "+maxAyaY+" times");
+    console.log("Most frequently reused verse: reused "+maxAyaY+" times");
 
     // load the Quran text:
     d3.text(quranTextFp).then(function(qtext) {
