@@ -266,7 +266,9 @@ function quranTextFromIndices(start, end){
 function getAllSuras(start, end){
     let suraAyaTok = qTokensD[end][1];
     let repeated = repeatedNgramsD[suraAyaTok+"."+(end-start)] || [];
+    console.log(repeated);
     let suraAya = suraAyaTok.split(".").slice(0,2).join(".");
+    suraAya = `<span title="${ayaTextD[suraAya]}">${suraAya}</span>`;
     if (repeated.length > 0){
         suraAya += `<br>(and ${repeated.length} other verses)`;
     }
@@ -283,7 +285,7 @@ function buildTable(data){
     // rolled is now an array of sub-arrays: [start_token, end_token, count]
     // sort the ngrams by frequency:
     rolled.sort((a,b) => b[2]-a[2]);
-    // keep only the top 25 ngrams:
+    // keep only the top 300 ngrams:
     let top = rolled.slice(0,300);
     // convert the start and end tokens into the ngram:
     top = top.map(arr => [quranTextFromIndices(arr[0], arr[1]), getAllSuras(arr[0], arr[1]), arr[2]])
@@ -295,6 +297,7 @@ function buildTable(data){
         table += "<tr>";
         arr.forEach(el => table += `<td>${el}</td>`);
         table += "</tr>";
+        //table += `<tr><td>${ar[0]}</td><td><span title="${ayaTextD[arr[1]]}">${arr[1]}</span></td><td>ar[2]</td></tr>`
     });
     table += "</table>";
     d3.select("#table").html(`<div>${caption}${table}</div>`);
