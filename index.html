@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>D3 Interactive Dashboard</title>
+    <title>Quran visualisation</title>
     <script src="js/d3.v7.min.js"></script>
     <style>
         .scatterplot { display: inline-block; margin: 10px; }
@@ -50,7 +50,7 @@
         <label for="suraVizBtn">sura-level</label>
     
         <input type="radio" id="ayaVizBtn" name="vizType" value="aya-viz">
-        <label for="ayaVizBtn">aya-level</label>
+        <label for="ayaVizBtn">verse-level</label>
 
         <input type="radio" id="tableVizBtn" name="vizType" value="aya-viz">
         <label for="tableVizBtn">quotation-level</label>
@@ -104,6 +104,7 @@
 </div>
 
 <div id="table" class="table"></div>
+<div>View the code on <a href="https://github.com/pverkind/quran-viz">Github <img src="img/github-mark.svg"/></a></div>
 
 
 <script src="js/script.js"></script>
