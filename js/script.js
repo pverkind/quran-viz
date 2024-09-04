@@ -268,7 +268,8 @@ function getAllSuras(start, end){
     let repeated = repeatedNgramsD[suraAyaTok+"."+(end-start)] || [];
     console.log(repeated);
     let suraAya = suraAyaTok.split(".").slice(0,2).join(".");
-    suraAya = `<span title="${ayaTextD[suraAya]}">${suraAya}</span>`;
+    //suraAya = `<span title="${ayaTextD[suraAya]}">${suraAya}</span>`;
+    suraAya = `<span title="test">${suraAya}</span>`;
     if (repeated.length > 0){
         suraAya += `<br>(and ${repeated.length} other verses)`;
     }
