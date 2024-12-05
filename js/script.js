@@ -273,7 +273,7 @@ function getAllSuras(start, end){
         let nVerses = (repeated.length == 1) ? "1 other verse" : `${repeated.length} other verses`; 
         // keep only the sura and aya number for the repeats:
         repeated = repeated.map(s => s.split(".").slice(0,2).join("."));
-        suraAya += `<br>(and <span title="${repeated.join(', '}">${nVerses}</span>)`;
+        suraAya += `<br>(and <span title="${repeated.join(', ')}">${nVerses}</span>)`;
     }
     
     return suraAya;
