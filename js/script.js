@@ -560,19 +560,27 @@ function showQuotationsOfWord(suraAya, rows, word) {
         html += `<tr class="quotationRow" data-i="${i}" style="cursor: pointer">` +
                 `<td>${quotationTextInVerse(suraAya, q)}</td><td>${q.count}</td><td>${q.nTexts}</td></tr>`;
     });
-    html += '</table><div id="quotationTexts" dir="ltr"></div>';
+    html += '</table>';
     d3.select("#wordDetails").html(html);
     d3.selectAll("#wordDetails tr.quotationRow").on("click", function() {
+        // the texts are shown in a row right below the quotation; a second click on the quotation closes it:
+        const wasOpen = this.nextElementSibling && this.nextElementSibling.classList.contains("textsRow");
+        d3.selectAll("#wordDetails tr.textsRow").remove();
         d3.selectAll("#wordDetails tr.quotationRow").style("background-color", null);
+        if (wasOpen) {
+            return;
+        }
         d3.select(this).style("background-color", "#e5e5e5");
-        showTextsOfQuotation(suraAya, rows, quotations[+this.dataset.i]);
+        const cell = d3.select(this.parentNode.insertBefore(document.createElement("tr"), this.nextSibling))
+            .attr("class", "textsRow")
+            .append("td").attr("colspan", 3).attr("dir", "ltr");
+        showTextsOfQuotation(suraAya, rows, quotations[+this.dataset.i], cell);
     });
 }
 
-/* Show the texts in which a quotation of a verse is cited (earliest first) */
-function showTextsOfQuotation(suraAya, rows, q) {
+/* Show the texts in which a quotation of a verse is cited (earliest first) in the table cell */
+function showTextsOfQuotation(suraAya, rows, q, div) {
     const texts = textsOfQuotation(rows, q.start, q.length, NGRAM_LENGTH_OFFSET);
-    const div = d3.select("#quotationTexts");
     div.html("<p>Loading...</p>");
     loadTextIds().then(textIds => {
         let html = `<p>${quotationTextInVerse(suraAya, q)}: cited ${q.count} times in ${texts.length} texts:</p>`;
