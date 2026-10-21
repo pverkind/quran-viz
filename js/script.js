@@ -28,7 +28,10 @@ var maxAyaY, qdata, ngrams;
 var ayaTextD = new Object();         // sura.aya: aya text
 var ayaTokenIndexD = new Object();   // sura.aya: running aya number
 var qTokensD = new Object();         // token index in Quran: [token, sura.aya.ayatokindex]
-var repeatedNgramsD = new Object();
+var qTokenIndexD = new Object();     // sura.aya.ayatokindex: token index in Quran
+var repeatedNgramsD = new Object();  // key of the first appearance of an ngram: keys of the other appearances
+var repeatedLookupD = new Object();  // key of each appearance of a repeated ngram: key of its first appearance
+var repeatedNgramsReady;             // promise: the repeated ngrams have been loaded
 
 
 function setupFilters() {
@@ -251,7 +254,7 @@ function filterNgrams(data) {
     );
 
     console.log("Number of rows after filtering: "+ filteredData.length);
-    return filteredData
+    return filteredData;
 
 }
 
@@ -263,45 +266,45 @@ function quranTextFromIndices(start, end){
     return qstr.trimEnd();
 }
 
-function getAllSuras(start, end){
-    let suraAyaTok = qTokensD[end][1];
-    let repeated = repeatedNgramsD[suraAyaTok+"."+(end-start)] || [];
-    console.log(repeated);
-    let suraAya = suraAyaTok.split(".").slice(0,2).join(".");
-    suraAya = `<span title="${ayaTextD[suraAya]}">${suraAya}</span>`;
+/* The verse(s) of a quotation, as html: the first appearance of the quotation in the Qurʾān
+   and the number of other verses in which it occurs.
+   key: key of the first appearance of the quotation (see quotations.js) */
+function getAllSuras(key){
+    let repeated = repeatedNgramsD[key] || [];
+    let suraAya = key.split(".").slice(0,2).join(".");
+    suraAya = `<span class="ttanchor" title="${ayaTextD[suraAya]}">${suraAya}</span>`;
     if (repeated.length > 0){
-        let nVerses = (repeated.length == 1) ? "1 other verse" : `${repeated.length} other verses`; 
+        let nVerses = (repeated.length == 1) ? "1 other verse" : `${repeated.length} other verses`;
         // keep only the sura and aya number for the repeats:
         repeated = repeated.map(s => s.split(".").slice(0,2).join("."));
-        suraAya += `<br>(and <span title="${repeated.join(', '}">${nVerses}</span>)`;
+        suraAya += `<br><span class="ttanchor" dir="ltr" title="${repeated.join(', ')}">(and ${nVerses})</span>`;
     }
-    
+
     return suraAya;
 }
 
 function buildTable(data){
+    console.log("Filtering data for the quotation-level table")
     const filteredData = filterNgrams(data);
-    // group by ngram (start and end token), and sum up the counts for each ngram:
-    let rolled = d3.flatRollup(
-        filteredData, 
-        v => d3.sum(v, d => d.count), 
-        d => d.start_token, d => d.end_token);
-    // rolled is now an array of sub-arrays: [start_token, end_token, count]
-    // sort the ngrams by frequency:
-    rolled.sort((a,b) => b[2]-a[2]);
-    // keep only the top 300 ngrams:
-    let top = rolled.slice(0,300);
-    // convert the start and end tokens into the ngram:
-    top = top.map(arr => [quranTextFromIndices(arr[0], arr[1]), getAllSuras(arr[0], arr[1]), arr[2]])
+    // merge the rows of the same quotation at different locations in the Quran
+    // (e.g. the basmala at the start of sura 1 and at the start of sura 2),
+    // and sum up the counts: [{key: key of the first appearance of the quotation, count: count}, ...]
+    // sorted by frequency:
+    const merged = mergeQuotations(filteredData, qTokensD, repeatedLookupD);
+    // keep only the top 300 quotations:
+    // and convert the keys into the text of the quotation, the verse(s) and the frequency:
+    const top = merged.slice(0,300).map(q => {
+        const ngram = parseQuotationKey(q.key, qTokenIndexD);
+        return [quranTextFromIndices(ngram.start, ngram.end), getAllSuras(q.key), q.count];
+    });
     // build the caption:
-    let caption = `<p>Displaying the 300 most frequent quotations (out of ${rolled.length} that agree with the filters):</p>`
-    // build the table html: 
+    let caption = `<p>Displaying the 300 most frequent quotations (out of ${merged.length} that agree with the filters; the same quotation in different verses is counted as one):</p>`
+    // build the table html:
     let table = '<table dir="rtl"><tr><th>Quoted Quran text</th><th>Verse</th><th>frequency</th></tr>';
     top.forEach(arr => {
         table += "<tr>";
         arr.forEach(el => table += `<td>${el}</td>`);
         table += "</tr>";
-        //table += `<tr><td>${ar[0]}</td><td><span title="${ayaTextD[arr[1]]}">${arr[1]}</span></td><td>ar[2]</td></tr>`
     });
     table += "</table>";
     d3.select("#table").html(`<div>${caption}${table}</div>`);
@@ -310,12 +313,18 @@ function buildTable(data){
 /*Display a table displaying the top X ngrams*/
 function buildTableViz(){
     removeAllGraphs()
+    // (the table needs the repeated ngrams to merge the same quotation at different locations)
+    Promise.resolve(repeatedNgramsReady).then(() => loadNgramsAndBuildTable());
+}
+
+function loadNgramsAndBuildTable(){
     if (typeof ngrams === 'undefined') {
         const fp =  `${dataFolder}/@ngrams_count_${release}.csv`;
             d3.csv(fp).then(data => {
                 data.forEach(d => {
                     d.start_token = +d.start_token;
                     d.end_token = +d.end_token;
+                    d.count = +d.count;
                     d.year = +d.year;
                     d.century = Math.ceil(d.year/100);
                     d.len = d.end_token - d.start_token;
@@ -437,6 +446,7 @@ d3.dsv("\t", allStatsFp).then(function(data) {
             let ayaTokens = d.aya_text.split(" ");
             for (let j=0; j<ayaTokens.length; j++) {
                 qTokensD[qtoken] = [ayaTokens[j], `${suraAya}.${j}`];
+                qTokenIndexD[`${suraAya}.${j}`] = qtoken;
                 qtoken += 1
             }
         }
@@ -445,8 +455,9 @@ d3.dsv("\t", allStatsFp).then(function(data) {
         // create the sura scatter plot
         buildSuraLevelViz();
 
-        d3.json("resources/first_repeated_quran_ngrams.json").then(data => {
+        repeatedNgramsReady = d3.json("resources/first_repeated_quran_ngrams.json").then(data => {
             repeatedNgramsD = data["data"];
+            repeatedLookupD = buildRepeatedLookup(repeatedNgramsD);
         });
 
     });
