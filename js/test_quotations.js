@@ -8,7 +8,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const fs = require("node:fs");
 const path = require("node:path");
-const {quotationKey, buildRepeatedLookup, canonicalKey, parseQuotationKey, mergeQuotations} = require("./quotations.js");
+const {quotationKey, buildRepeatedLookup, canonicalKey, parseQuotationKey, mergeQuotations, tokenCounts} = require("./quotations.js");
 
 const release = "2023_1_8";
 
@@ -144,4 +144,55 @@ test("every location in the data has a key that can be converted back into the s
         assert.deepStrictEqual([parsed.start, parsed.end], [d.start_token, d.end_token], id);
     }
     assert.ok(seen.size > 100000);
+});
+
+test("counting the quotations that contain each word of a verse (a small example)", () => {
+    // verse of 5 words; ngram_length is the number of words minus one
+    const rows = [
+        {ngram_start: 1, ngram_length: 3},   // words 1-4
+        {ngram_start: 1, ngram_length: 4},   // words 1-5
+        {ngram_start: 5, ngram_length: 0},   // word 5
+        {ngram_start: 2, ngram_length: 1},   // words 2-3
+    ];
+    assert.deepStrictEqual(tokenCounts(rows, 5, 1), [2, 3, 3, 2, 2]);
+    // if ngram_length is the number of words:
+    const rows2 = rows.map(d => ({...d, ngram_length: d.ngram_length + 1}));
+    assert.deepStrictEqual(tokenCounts(rows2, 5, 0), [2, 3, 3, 2, 2]);
+});
+
+test("counting: quotations that go beyond the verse or start before it", () => {
+    assert.deepStrictEqual(tokenCounts([{ngram_start: 3, ngram_length: 10}], 5, 1), [0, 0, 1, 1, 1]);
+    assert.deepStrictEqual(tokenCounts([{ngram_start: 0, ngram_length: 2}], 5, 1), [1, 1, 0, 0, 0]);
+    assert.deepStrictEqual(tokenCounts([], 3, 1), [0, 0, 0]);
+});
+
+test("counting: verses with more than 100 words", () => {
+    const counts = tokenCounts([{ngram_start: 120, ngram_length: 7}], 128, 1);
+    assert.strictEqual(counts.length, 128);
+    assert.strictEqual(counts.filter(c => c === 1).length, 8);
+    assert.ok(!counts.some(Number.isNaN));
+});
+
+test("counting: the verse files of the app", () => {
+    // verse 2:1 has 5 words: the basmala (4 words) and "alif lam mim"
+    const readVerse = name => fs.readFileSync(path.join(__dirname, "..", "data", `${name}.csv`), "utf-8")
+        .split(String.fromCharCode(10)).map(l => l.trim()).slice(1).filter(Boolean)
+        .map(l => { const p = l.split(","); return {ngram_start: +p[0], ngram_length: +p[1]}; });
+    const rows = readVerse("2.1");
+    const counts = tokenCounts(rows, 5, 1);
+    assert.strictEqual(counts.length, 5);
+    // the quotations of the basmala cover the first 4 words, the whole verse also the fifth:
+    const wholeVerse = rows.filter(d => d.ngram_start === 1 && d.ngram_length === 4).length;
+    const basmala = rows.filter(d => d.ngram_start === 1 && d.ngram_length === 3).length;
+    assert.ok(wholeVerse > 1000 && basmala > 10000);
+    assert.ok(counts[0] >= wholeVerse + basmala);
+    assert.ok(counts[4] >= wholeVerse && counts[4] < counts[0]);
+    // the total number of counts is the total number of words that the rows cover:
+    const covered = rows.reduce((sum, d) => sum + Math.min(d.ngram_length + 1, 5 - d.ngram_start + 1), 0);
+    assert.strictEqual(counts.reduce((a, b) => a + b, 0), covered);
+
+    // the longest verse (2:282, more than 100 words):
+    const counts282 = tokenCounts(readVerse("2.282"), 128, 1);
+    assert.strictEqual(counts282.length, 128);
+    assert.ok(!counts282.some(Number.isNaN));
 });

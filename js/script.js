@@ -61,7 +61,9 @@ function resetFilters(){
 function removeAllGraphs(){
     d3.select("#scatter1 svg").remove();
     d3.select("#scatter2 svg").remove();
-    d3.select("#ayaTextDiv p").remove();
+    d3.select("#ayaTextDiv").html("");
+    currentAyaKey = null;
+    heatmapLocked = false;
     d3.select("#table div").remove();
 }
 
@@ -129,12 +131,39 @@ function createScatterPlot(container, data, xVar, yVar, title, sura, width) {
     const margin = { top: 20, right: 20, bottom: 30, left: 40 };
     
     // build the plot's canvas:
-    const svg = d3.select(container)
+    const root = d3.select(container)
         .append("svg")
             .attr("width", width + margin.left + margin.right)
-            .attr("height", height + margin.top + margin.bottom)
-            .append("g")
+            .attr("height", height + margin.top + margin.bottom);
+    const svg = root.append("g")
                 .attr("transform", `translate(${margin.left},${margin.top})`);
+
+    // a click anywhere in the graph enables hovering again (see the click handler of the dots):
+    root.on("click", () => {
+        heatmapLocked = false;
+        hint.style("display", "none");
+    });
+
+    // a pop-up (inside the graph) with a hint, shown when the mouse is over a dot:
+    const hint = svg.append("text")
+        .attr("class", "hint")
+        .attr("font-size", 12)
+        .attr("fill", "#333")
+        .style("display", "none")
+        .style("pointer-events", "none")
+        // (a white outline, to be able to read the text on top of the lines of the graph:)
+        .style("paint-order", "stroke")
+        .style("stroke", "white")
+        .style("stroke-width", "4px")
+        .text("Click to show the heat map of the verse");
+    function showHint(cx, cy) {
+        // put the hint next to the dot, within the graph:
+        const left = cx > width - 230;
+        hint.attr("x", left ? cx - 8 : cx + 8)
+            .attr("y", cy < 25 ? cy + 20 : cy - 8)
+            .attr("text-anchor", left ? "end" : "start")
+            .style("display", null);
+    }
     
     // build x and y scales:
     const x = d3.scaleLinear()
@@ -189,21 +218,46 @@ function createScatterPlot(container, data, xVar, yVar, title, sura, width) {
             .style("fill", "blue")
             .style("opacity", 0)
             .on("mouseover", function(event, d) {
-                console.log("CLICKED!");
-                console.log(d);
-                d3.selectAll(".dot").style("fill", "blue").style("opacity", 0);
-                d3.select(this).style("fill", "red").style("opacity", 0.5);
-                d3.select("#ayaTextDiv p").remove();
+                if (heatmapLocked) {
+                    return;   // a heat map is shown: hovering is disabled until the user clicks in the graph
+                }
+                hoverOverDot(this, d);
+            })
+            .on("mouseout", () => hint.style("display", "none"))
+            .on("click", function(event, d) {
                 if (title === "Suras") {
-                    filterScatter2(d, data);
+                    return;
+                }
+                hint.style("display", "none");
+                if (heatmapLocked) {
+                    // enable hovering again (and treat the click as the mouse entering this dot):
+                    heatmapLocked = false;
+                    event.stopPropagation();
+                    hoverOverDot(this, d);
                 } else {
-                    //[sura, aya] = d.sura_aya.split(".");
-                    //let formattedAya = formatAyaText(sura, aya);
-                    //d3.select("#ayaTextDiv").html(`<p>${formattedAya}<br>NB: coloring is supposed to show which parts of the aya are more often quoted than others. This feature is experimental and not working well yet (it's concerning that the last part of an aya is almost always heavier reused than the beginning, I need to check whether this is a data problem)</p>`); 
-                    d3.select("#ayaTextDiv").html(`<p>${d.sura_aya}: ${ayaTextD[d.sura_aya]}</p>`)
+                    // clicking on the dot at the top of a bar of a verse shows the heat map of the verse
+                    // and disables hovering (until the user clicks in a graph):
+                    heatmapLocked = true;
+                    event.stopPropagation();
+                    showAyaHeatMap(d.sura_aya);
                 }
             });
-    
+
+    // what happens when the mouse is over a dot (or a click enables hovering again):
+    function hoverOverDot(dot, d) {
+        d3.selectAll(".dot").style("fill", "blue").style("opacity", 0);
+        d3.select(dot).style("fill", "red").style("opacity", 0.5);
+        if (title === "Suras") {
+            d3.select("#ayaTextDiv").html("");
+            currentAyaKey = null;
+            filterScatter2(d, data);
+        } else {
+            // show the text of the verse (the heat map is shown when the dot is clicked):
+            showAya(d.sura_aya);
+            showHint(x(d[xVar]), y(d[yVar]));
+        }
+    }
+
     // add the title to the graph:
     if (title == "Verses") {
         title = "Verses in sura "+sura;
@@ -213,6 +267,9 @@ function createScatterPlot(container, data, xVar, yVar, title, sura, width) {
         .attr("y", margin.top)
         .attr("text-anchor", "middle")
         .text(title);
+
+    // draw the hint on top of the lines and dots:
+    hint.raise();
 }
 
 
@@ -338,49 +395,90 @@ function loadNgramsAndBuildTable(){
     
 }
 
-function parseAyaData(ayaData) {
-    // create an array filled with zeroes:
-    const tokenData = new Array(100).fill(0);
+/* The number of words that a row of a verse file (data/<sura>.<aya>.csv) covers is
+   ngram_length + NGRAM_LENGTH_OFFSET. In the current data, ngram_length is the number of words minus one
+   (a quotation of one word has ngram_length 0). If the files are generated again with ngram_length
+   as the number of words, change this to 0. */
+const NGRAM_LENGTH_OFFSET = 1;
 
-    // TODO: filter ayaData (by year/century/ngram_freq/...)
-    ayaData = filterArray(ayaData)
+var ayaDataCache = new Map();   // "sura.aya": promise of the rows of the file of that verse
+var currentAyaKey = null;       // the verse that is shown below the plot
+var heatmapLocked = false;      // True after a click on a dot: hovering is disabled until the user clicks in a graph
 
-    // increment the count for each token in the ngram:
-    ayaData.forEach(d => {
-        for (let i=d.ngram_start; i<d.ngram_start+d.ngram_length+1; i++) {
-            tokenData[i-1] += 1;
-        }
-    })
-    return tokenData
+/* Load (once) the quotations of a verse: data/<sura>.<aya>.csv */
+function loadAyaData(sura, aya) {
+    const key = `${sura}.${aya}`;
+    if (!ayaDataCache.has(key)) {
+        const promise = d3.csv(`${dataFolder}/${key}.csv`).then(rows => {
+            rows.forEach(d => {
+                d.ngram_start = +d.ngram_start;
+                d.ngram_length = +d.ngram_length;
+                d.century = +d.century;
+                d.year = +d.year;
+                d.sura = +sura;
+                d.aya = +aya;
+            });
+            return rows;
+        });
+        promise.catch(() => ayaDataCache.delete(key));   // (so that it can be tried again)
+        ayaDataCache.set(key, promise);
+    }
+    return ayaDataCache.get(key);
 }
 
-function formatAyaText(sura, aya){
-    const suraAya = `${sura}.${aya}`;
-    const fp = `${dataFolder}/${suraAya}.csv`;
-    const ayaTokens = ayaTextD[suraAya].split(" ");
-    d3.csv(fp).then(function(ayaData) {
-        ayaData.forEach(d => {
-            d.ngram_start = +d.ngram_start;
-            d.ngram_length = +d.ngram_length;
-            d.century = +d.century;
-            d.year = +d.year;
-            d.sura = +sura;
-            d.aya = +aya;
-        })
-        const tokenCounts = parseAyaData(ayaData);
-        let domain = d3.extent(tokenCounts);
-        const colorScale = d3
-            .scaleLinear()
-            .domain([domain[0], (domain[0] + domain[1])/2, domain[1]])
-            //.domain([0,maxAyaY])
-            .range(['lightyellow', 'orange', 'purple']);
-        let formattedAya = `${sura}.${aya}: `;
-        for (i=0; i<ayaTokens.length; i++) {
-            formattedAya += `<span style="background-color: ${colorScale(tokenCounts[i])}">${ayaTokens[i]} </span>`
+/* Show the text of a verse (when the mouse is over the dot at the top of its bar) */
+function showAya(suraAya) {
+    if (currentAyaKey === suraAya) {
+        return;   // (it is shown already; this keeps the heat map if the mouse enters the same dot again)
+    }
+    currentAyaKey = suraAya;
+    d3.select("#ayaTextDiv").html(
+        `<p>${suraAya}: ${ayaTextD[suraAya]}</p>` +
+        `<p dir="ltr" id="heatmapStatus"></p>`);
+}
+
+/* Show the verse with each word coloured by the number of quotations that contain the word
+
+   (Earlier observation: the last part of a verse seemed to be reused more often than the beginning.
+   To be checked in the data: the cause can be the data, not the code.) */
+function showAyaHeatMap(suraAya) {
+    const [sura, aya] = suraAya.split(".");
+    showAya(suraAya);   // (does nothing if the verse is shown already)
+    d3.select("#heatmapStatus").text("Loading the heat map...");
+    loadAyaData(sura, aya).then(rows => {
+        if (currentAyaKey !== suraAya) {
+            return;   // the mouse has moved to another verse in the meantime
         }
-        return formattedAya;
-        
+        d3.select("#ayaTextDiv").html(formatAyaHeatMap(suraAya, filterArray(rows)));
+    }).catch(error => {
+        console.error(error);
+        if (currentAyaKey === suraAya) {
+            d3.select("#heatmapStatus").text("The heat map is not available (click in the graph, and then on the dot to try again).");
+        }
     });
+}
+
+/* The html of a verse in which each word is coloured by the number of quotations that contain the word
+   (only the quotations that agree with the filters). */
+function formatAyaHeatMap(suraAya, rows) {
+    const ayaTokens = ayaTextD[suraAya].split(" ");
+    const counts = tokenCounts(rows, ayaTokens.length, NGRAM_LENGTH_OFFSET);
+    const [min, max] = d3.extent(counts);
+    if (max === 0) {
+        return `<p>${suraAya}: ${ayaTextD[suraAya]}</p><p dir="ltr">There are no quotations of this verse that agree with the filters.</p>`;
+    }
+    const colorScale = (min === max)
+        ? () => "orange"
+        : d3.scaleLinear()
+            .domain([min, (min + max) / 2, max])
+            .range(["lightyellow", "orange", "purple"]);
+    let html = `<p>${suraAya}: `;
+    ayaTokens.forEach((token, i) => {
+        html += `<span title="${counts[i]}" style="background-color: ${colorScale(counts[i])}">${token} </span>`;
+    });
+    html += `</p><p dir="ltr">Colour: the number of quotations that contain the word ` +
+            `(lightest: ${min}, darkest: ${max}; hover over a word to see its number).</p>`;
+    return html;
 }
 
 function calculateLargestCount(qdata) {

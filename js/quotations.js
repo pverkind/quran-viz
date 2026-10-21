@@ -1,6 +1,7 @@
 /*
 Functions to merge the data of the same quotation at different locations in the Qurʾān
-(for example, the basmala at the start of sura 1 and at the start of sura 2).
+(for example, the basmala at the start of sura 1 and at the start of sura 2),
+and to count how often each word of a verse is quoted.
 
 These functions have no dependencies (no d3, no DOM), so they can be tested with Node
 (see test_quotations.js).
@@ -67,6 +68,26 @@ function mergeQuotations(rows, qTokensD, repeatedLookupD) {
     return Array.from(counts, ([key, count]) => ({key, count})).sort((a, b) => b.count - a.count);
 }
 
+/* For each word of a verse: the number of quotations that contain the word.
+
+   rows: the rows of the file of the verse (data/<sura>.<aya>.csv): [{ngram_start, ngram_length, ...}, ...]
+       ngram_start is the (one-based) number of the first word of the quotation in the verse;
+       the number of words of the quotation is ngram_length + lengthOffset
+       (in the current data, ngram_length is the number of words minus one: lengthOffset = 1)
+   nTokens: the number of words in the verse
+   Returns: an array with nTokens counts (the first element is the count of the first word) */
+function tokenCounts(rows, nTokens, lengthOffset) {
+    const counts = new Array(nTokens).fill(0);
+    for (const d of rows) {
+        const first = Math.max(d.ngram_start, 1);
+        const last = Math.min(d.ngram_start + d.ngram_length + lengthOffset - 1, nTokens);
+        for (let i = first; i <= last; i++) {
+            counts[i - 1] += 1;
+        }
+    }
+    return counts;
+}
+
 if (typeof module !== "undefined" && module.exports) {
-    module.exports = {quotationKey, buildRepeatedLookup, canonicalKey, parseQuotationKey, mergeQuotations};
+    module.exports = {quotationKey, buildRepeatedLookup, canonicalKey, parseQuotationKey, mergeQuotations, tokenCounts};
 }
