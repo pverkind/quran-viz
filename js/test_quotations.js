@@ -10,7 +10,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const {quotationKey, buildRepeatedLookup, canonicalKey, parseQuotationKey, mergeQuotations, tokenCounts,
     buildRanges, appearancesOf, filterQuotationsByRange,
-    quotationsAtWord, textsOfQuotation} = require("./quotations.js");
+    textKey, segmentOf, continuationSegments, resolveWholeQuotations,
+    quotationsAtWord, textsOfQuotation, countByVerse} = require("./quotations.js");
 
 const release = "2023_1_8";
 
@@ -287,20 +288,24 @@ test("selecting the quotations of a sura or verse (the data of the app)", () => 
 });
 
 test("the quotations that contain a word of a verse (a small example)", () => {
-    // verse of 5 words; ngram_length is the number of words
+    // verse of 5 words; ngram_length is the number of words; qstart and qend: the whole quotation
+    const row = (start, length, text_id, year, qstart, qend) =>
+        ({ngram_start: start, ngram_length: length, text_id, year, century: Math.ceil(year / 100), qstart, qend});
     const rows = [
-        {ngram_start: 1, ngram_length: 4, text_id: "7", year: 458, century: 5},
-        {ngram_start: 1, ngram_length: 4, text_id: "7", year: 458, century: 5},    // the same text cites it again
-        {ngram_start: 1, ngram_length: 4, text_id: "9", year: 300, century: 3},
-        {ngram_start: 1, ngram_length: 5, text_id: "8", year: 900, century: 9},
-        {ngram_start: 5, ngram_length: 1, text_id: "8", year: 900, century: 9},
-        {ngram_start: -2, ngram_length: 4, text_id: "3", year: 1000, century: 10}, // starts in the previous verse: words 1-1
+        row(1, 4, "7", 458, 10, 13),
+        row(1, 4, "7", 458, 10, 13),     // the same text cites it again
+        row(1, 4, "9", 300, 10, 13),
+        row(1, 4, "5", 500, 10, 14),     // the same words of this verse, but the quotation continues in the next verse
+        row(1, 5, "8", 900, 10, 14),
+        row(5, 1, "8", 900, 14, 14),
+        row(-2, 4, "3", 1000, 7, 10),    // starts in the previous verse: word 1 of this verse is the last word
     ];
     assert.deepStrictEqual(quotationsAtWord(rows, 1, 0),
-        [{start: 1, length: 4, count: 3, nTexts: 2}, {start: 1, length: 5, count: 1, nTexts: 1},
-         {start: -2, length: 4, count: 1, nTexts: 1}]);
-    assert.deepStrictEqual(quotationsAtWord(rows, 5, 0).map(q => [q.start, q.length]), [[1, 5], [5, 1]]);
-    assert.deepStrictEqual(quotationsAtWord(rows, 3, 0).map(q => [q.start, q.length]), [[1, 4], [1, 5]]);
+        [{qstart: 10, qend: 13, length: 4, count: 3, nTexts: 2},
+         {qstart: 10, qend: 14, length: 5, count: 2, nTexts: 2},
+         {qstart: 7, qend: 10, length: 4, count: 1, nTexts: 1}]);
+    assert.deepStrictEqual(quotationsAtWord(rows, 5, 0).map(q => [q.qstart, q.qend]), [[10, 14], [14, 14]]);
+    assert.deepStrictEqual(quotationsAtWord(rows, 3, 0).map(q => [q.qstart, q.qend]), [[10, 13], [10, 14]]);
     // the old data (ngram_length is the number of words minus one):
     const old = rows.map(d => ({...d, ngram_length: d.ngram_length - 1}));
     assert.deepStrictEqual(quotationsAtWord(old, 1, 1), quotationsAtWord(rows, 1, 0));
@@ -309,24 +314,106 @@ test("the quotations that contain a word of a verse (a small example)", () => {
 
 test("the texts of a quotation of a verse (a small example)", () => {
     const rows = [
-        {ngram_start: 1, ngram_length: 4, text_id: "7", year: 458, century: 5},
-        {ngram_start: 1, ngram_length: 4, text_id: "7", year: 458, century: 5},
-        {ngram_start: 1, ngram_length: 4, text_id: "9", year: 300, century: 3},
-        {ngram_start: 1, ngram_length: 5, text_id: "8", year: 900, century: 9},
+        {ngram_start: 1, ngram_length: 4, text_id: "7", year: 458, century: 5, qstart: 10, qend: 13},
+        {ngram_start: 1, ngram_length: 4, text_id: "7", year: 458, century: 5, qstart: 10, qend: 13},
+        {ngram_start: 1, ngram_length: 4, text_id: "9", year: 300, century: 3, qstart: 10, qend: 13},
+        {ngram_start: 1, ngram_length: 4, text_id: "6", year: 600, century: 6, qstart: 10, qend: 14},
     ];
-    assert.deepStrictEqual(textsOfQuotation(rows, 1, 4, 0),
+    assert.deepStrictEqual(textsOfQuotation(rows, 10, 13),
         [{textId: "9", year: 300, century: 3, count: 1}, {textId: "7", year: 458, century: 5, count: 2}]);
-    assert.deepStrictEqual(textsOfQuotation(rows, 1, 5, 0).map(t => t.textId), ["8"]);
-    assert.deepStrictEqual(textsOfQuotation(rows, 2, 4, 0), []);
+    assert.deepStrictEqual(textsOfQuotation(rows, 10, 14).map(t => t.textId), ["6"]);
+    assert.deepStrictEqual(textsOfQuotation(rows, 11, 13), []);
 });
 
-test("the quotations and texts of a word in a verse file of the app (33:33)", () => {
-    const lines = fs.readFileSync(path.join(__dirname, "..", "data", "33.33.csv"), "utf-8")
-        .split(/\r?\n/).filter(Boolean).slice(1);
-    const rows = lines.map(l => {
+// the verse files of the app, for the tests of the whole quotations:
+const readVerseFile = name => fs.readFileSync(path.join(__dirname, "..", "data", `${name}.csv`), "utf-8")
+    .split(/\r?\n/).filter(Boolean).slice(1).map(l => {
         const p = l.split(",");
-        return {ngram_start: +p[0], ngram_length: +p[1], text_id: p[2], century: +p[3], year: +p[4]};
+        return {ngram_start: +p[0], ngram_length: +p[1], text_id: p[2], century: +p[3], year: +p[4],
+                text_tok_start: p[5], text_tok_end: p[6]};
     });
+const verseList = Object.keys(ayaTextD);
+const deps = {
+    loadRows: async v => readVerseFile(v),
+    neighbour: (v, dir) => verseList[verseList.indexOf(v) + dir] || null,
+    nWords: v => ayaTextD[v].split(" ").length,
+    firstToken: v => qTokenIndexD[`${v}.1`],
+    lengthOffset: 0,
+};
+
+test("whole quotations: a quotation of two verses (1:1 and 1:2)", async () => {
+    const rows = await resolveWholeQuotations("1.1", readVerseFile("1.1"), deps);
+    // one text (1338) cites "al-rahim al-hamdu lillahi rabbi l-calamin": the last word of 1:1 and 1:2
+    const row = rows.find(d => d.text_id === "1338" && d.text_tok_start === "20771" && d.text_tok_end === "20775");
+    assert.strictEqual(row.ngram_length, 1);
+    assert.strictEqual(row.total, 5);
+    assert.strictEqual(row.qstart, qTokenIndexD["1.1.4"]);
+    assert.strictEqual(row.qend, qTokenIndexD["1.2.4"]);
+    // the same quotation, seen from 1:2:
+    const rows2 = await resolveWholeQuotations("1.2", readVerseFile("1.2"), deps);
+    const row2 = rows2.find(d => d.text_id === "1338" && d.text_tok_start === "20771" && d.text_tok_end === "20775" && d.ngram_start === 1);
+    assert.deepStrictEqual([row2.qstart, row2.qend, row2.total], [row.qstart, row.qend, 5]);
+    // the whole quotation is at least as long as its part in the verse, and it contains it:
+    for (const d of rows.concat(rows2)) {
+        assert.ok(d.total >= d.ngram_length && d.qstart <= d.qend);
+    }
+    // (done already: nothing changes)
+    assert.strictEqual(await resolveWholeQuotations("1.1", rows, deps), rows);
+});
+
+test("whole quotations: rows that are a complete quotation do not change; one-word fragments are found", async () => {
+    const rows = await resolveWholeQuotations("1.1", readVerseFile("1.1"), deps);
+    const whole = rows.filter(d => d.ngram_start === 1 && d.ngram_length === 4 && (+d.text_tok_end) - (+d.text_tok_start) + 1 === 4);
+    assert.ok(whole.length > 30000);
+    assert.ok(whole.every(d => d.total === 4 && d.qstart === 0 && d.qend === 3));
+    // the one-word rows of 1:1 are the end of longer quotations:
+    const oneWord = rows.filter(d => d.ngram_length === 1);
+    assert.ok(oneWord.length > 0 && oneWord.filter(d => d.total > 1).length >= oneWord.length - 3);
+    // the grouping of the quotations of the last word: the fragments are grouped by whole quotation:
+    const quotations = quotationsAtWord(rows, 4, 0);
+    assert.ok(quotations.every(q => q.length >= 1));
+    assert.ok(quotations.filter(q => q.length === 1).length <= 3);
+});
+
+test("whole quotations: a small example with a quotation of three verses", async () => {
+    // verses a (3 words), b (2 words), c (4 words); the quotation cites the last word of a, all of b and the first word of c
+    const words = {a: 3, b: 2, c: 4};
+    const files = {
+        a: [{ngram_start: 3, ngram_length: 1, text_id: "1", text_tok_start: "100", text_tok_end: "103"}],
+        b: [{ngram_start: 1, ngram_length: 2, text_id: "1", text_tok_start: "100", text_tok_end: "103"}],
+        c: [{ngram_start: 1, ngram_length: 1, text_id: "1", text_tok_start: "100", text_tok_end: "103"}],
+    };
+    const order = ["a", "b", "c"];
+    const d = {
+        loadRows: async v => files[v],
+        neighbour: (v, dir) => order[order.indexOf(v) + dir] || null,
+        nWords: v => words[v],
+        firstToken: v => ({a: 0, b: 3, c: 5})[v],
+        lengthOffset: 0,
+    };
+    for (const v of order) {
+        const rows = JSON.parse(JSON.stringify(files[v]));
+        await resolveWholeQuotations(v, rows, d);
+        assert.deepStrictEqual([rows[0].qstart, rows[0].qend, rows[0].total], [2, 5, 4], v);
+    }
+});
+
+test("whole quotations: a repeated phrase in a verse that does not continue", async () => {
+    // the text cites 5 words, but the row has 1 word in a verse of which the neighbours do not have the citation
+    const words = {a: 3, b: 2};
+    const files = {
+        a: [{ngram_start: 3, ngram_length: 1, text_id: "1", text_tok_start: "100", text_tok_end: "104"}],
+        b: [{ngram_start: 1, ngram_length: 2, text_id: "2", text_tok_start: "5", text_tok_end: "6"}],
+    };
+    const d = {loadRows: async v => files[v], neighbour: (v, dir) => ({a: {"1": "b"}, b: {"-1": "a"}})[v][dir] || null,
+               nWords: v => words[v], firstToken: v => ({a: 0, b: 3})[v], lengthOffset: 0};
+    const rows = JSON.parse(JSON.stringify(files.a));
+    await resolveWholeQuotations("a", rows, d);
+    assert.deepStrictEqual([rows[0].qstart, rows[0].qend, rows[0].total], [2, 2, 1]);
+});
+
+test("the quotations and texts of a word in a verse file of the app (33:33)", async () => {
+    const rows = await resolveWholeQuotations("33.33", readVerseFile("33.33"), deps);
     const nWords = ayaTextD["33.33"].split(" ").length;
     // the number of rows that cover a word is the sum of the counts of the quotations of the word:
     const counts = tokenCounts(rows, nWords, 0);
@@ -335,11 +422,57 @@ test("the quotations and texts of a word in a verse file of the app (33:33)", ()
         assert.strictEqual(quotations.reduce((sum, q) => sum + q.count, 0), counts[word - 1], `word ${word}`);
         // and the texts of each quotation add up to its count:
         for (const q of quotations.slice(0, 5)) {
-            const texts = textsOfQuotation(rows, q.start, q.length, 0);
+            const texts = textsOfQuotation(rows, q.qstart, q.qend);
             assert.strictEqual(texts.reduce((sum, t) => sum + t.count, 0), q.count);
             assert.strictEqual(texts.length, q.nTexts);
             for (let i = 1; i < texts.length; i++) assert.ok(texts[i - 1].year <= texts[i].year);
         }
         for (let i = 1; i < quotations.length; i++) assert.ok(quotations[i - 1].count >= quotations[i].count);
     }
+});
+
+test("counting the quotations per verse: first locations and all locations", () => {
+    const verseList = Object.keys(ayaTextD);
+    const verseOfToken = [];
+    verseList.forEach((v, i) => ayaTextD[v].split(" ").forEach(() => verseOfToken.push(i)));
+    const rows = readNgrams();
+    const suraTotals = counts => {
+        const totals = {};
+        for (const [id, count] of counts) {
+            const sura = verseList[id % 10000].split(".")[0];
+            totals[sura] = (totals[sura] || 0) + count;
+        }
+        return totals;
+    };
+    const first = suraTotals(countByVerse(rows, qTokensD, qTokenIndexD, repeatedNgramsD, verseOfToken, false));
+    const all = suraTotals(countByVerse(rows, qTokensD, qTokenIndexD, repeatedNgramsD, verseOfToken, true));
+    // the first locations are the numbers in the stats file that the graphs are made from:
+    const stats = {};
+    for (const line of fs.readFileSync(path.join(__dirname, "..", "data", `@quran_data_stats_all_${release}.tsv`), "utf-8").split(/\r?\n/).slice(1)) {
+        const p = line.split("\t");
+        if (p.length === 5) stats[p[2]] = (stats[p[2]] || 0) + +p[4];
+    }
+    for (const sura of ["1", "2", "9", "36", "114"]) {
+        assert.strictEqual(first[sura], stats[sura], `sura ${sura}`);
+    }
+    // all locations: never fewer, and more in suras that contain repeated quotations:
+    for (const sura of Object.keys(first)) {
+        assert.ok(all[sura] >= first[sura], sura);
+    }
+    assert.ok(all["114"] > first["114"]);
+    assert.ok(all["2"] > first["2"]);
+});
+
+test("counting the quotations per verse (a small example)", () => {
+    // verses a (3 words: tokens 0-2) and b (3 words: tokens 3-5); the quotation of tokens 1-2 also occurs at tokens 4-5
+    const toks = {0: ["a1", "a.1"], 1: ["a2", "a.2"], 2: ["a3", "a.3"], 3: ["b1", "b.1"], 4: ["b2", "b.2"], 5: ["b3", "b.3"]};
+    const index = {"a.1": 0, "a.2": 1, "a.3": 2, "b.1": 3, "b.2": 4, "b.3": 5};
+    const verseOfToken = [0, 0, 0, 1, 1, 1];
+    const rows = [{start_token: 1, end_token: 2, year: 100, count: 4}, {start_token: 2, end_token: 3, year: 200, count: 1}];
+    const repeated = {"a.3.2": ["b.3"]};     // the quotation that ends at a.3 (2 words) also ends at b.3
+    const first = countByVerse(rows, toks, index, repeated, verseOfToken, false);
+    assert.deepStrictEqual(Array.from(first), [[100 * 10000, 4], [200 * 10000, 1], [200 * 10000 + 1, 1]]);
+    const all = countByVerse(rows, toks, index, repeated, verseOfToken, true);
+    // the first quotation: also in verse b (tokens 4-5); the second one (tokens 2-3 over two verses) is not repeated:
+    assert.deepStrictEqual(Array.from(all), [[100 * 10000, 4], [100 * 10000 + 1, 4], [200 * 10000, 1], [200 * 10000 + 1, 1]]);
 });

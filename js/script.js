@@ -11,11 +11,33 @@ Issues:
 const release = "2023_1_8";
 const quranTextFp = "resources/quran-simple.txt";
 const dataFolder = "data";
+// the names of the suras (the name of sura 1 is the first element):
+const SURA_NAMES = [
+    "الفاتحة", "البقرة", "آل عمران", "النساء", "المائدة", "الأنعام", "الأعراف", "الأنفال",
+    "التوبة", "يونس", "هود", "يوسف", "الرعد", "إبراهيم", "الحجر", "النحل",
+    "الإسراء", "الكهف", "مريم", "طه", "الأنبياء", "الحج", "المؤمنون", "النور",
+    "الفرقان", "الشعراء", "النمل", "القصص", "العنكبوت", "الروم", "لقمان", "السجدة",
+    "الأحزاب", "سبأ", "فاطر", "يس", "الصافات", "ص", "الزمر", "غافر",
+    "فصلت", "الشورى", "الزخرف", "الدخان", "الجاثية", "الأحقاف", "محمد", "الفتح",
+    "الحجرات", "ق", "الذاريات", "الطور", "النجم", "القمر", "الرحمن", "الواقعة",
+    "الحديد", "المجادلة", "الحشر", "الممتحنة", "الصف", "الجمعة", "المنافقون", "التغابن",
+    "الطلاق", "التحريم", "الملك", "القلم", "الحاقة", "المعارج", "نوح", "الجن",
+    "المزمل", "المدثر", "القيامة", "الإنسان", "المرسلات", "النبأ", "النازعات", "عبس",
+    "التكوير", "الانفطار", "المطففين", "الانشقاق", "البروج", "الطارق", "الأعلى", "الغاشية",
+    "الفجر", "البلد", "الشمس", "الليل", "الضحى", "الشرح", "التين", "العلق",
+    "القدر", "البينة", "الزلزلة", "العاديات", "القارعة", "التكاثر", "العصر", "الهمزة",
+    "الفيل", "قريش", "الماعون", "الكوثر", "الكافرون", "النصر", "المسد", "الإخلاص",
+    "الفلق", "الناس",
+];
 const allStatsFp = `${dataFolder}/@quran_data_stats_all_${release}.tsv`;
 
 // buttons:
 const resetBtn = document.getElementById("resetFiltersBtn");
 resetBtn.addEventListener("click", resetFilters);
+d3.selectAll('input[name="plotType"]').on("change", () => updateVisuals());
+d3.select("#compareCentury").on("change", () => updateVisuals());
+d3.selectAll('input[name="locations"]').on("change", () => updateLocations());
+d3.selectAll('input[name="numbers"]').on("change", () => updateVisuals());
 const suraVizBtn = document.getElementById("suraVizBtn");
 suraVizBtn.addEventListener("click", buildSuraLevelViz);
 const ayaVizBtn = document.getElementById("ayaVizBtn");
@@ -62,6 +84,7 @@ function resetFilters(){
 }
 
 function removeAllGraphs(){
+    d3.selectAll("#plotToggle, #compareToggle, #numbersToggle, #locationsToggle").classed("disabled", tableVizBtn.checked);   // (bar plot or heat map: not for the table)
     d3.select("#scatter1 svg").remove();
     d3.select("#scatter2 svg").remove();
     d3.select("#ayaTextDiv").html("");
@@ -69,6 +92,7 @@ function removeAllGraphs(){
     heatmapVerse = null;
     selectedWord = null;
     verseSura = null;
+    tableSelection = null;
     highlightedSura = null;
     highlightedVerse = null;
     suraLocked = false;
@@ -104,12 +128,50 @@ function filterArray(data, ignore = {}) {
     return filteredData; 
 }
 
+/* The data of the graphs: the quotations at their first location in the Qurʾān (the stats file),
+   or (if "all locations" is checked and the data is ready) at all their locations */
+function currentQdata() {
+    return (document.getElementById("allLocationsBtn").checked && qdataAll) ? qdataAll : qdata;
+}
+
+/* Count the quotations at all their locations in the Qurʾān (not only the first one), without extra data files:
+   the quotations of @ngrams_count (their first location) and the dictionary of the repeated ngrams.
+   Returns a promise of the rows [{century, year, sura, aya, sura_aya, count}, ...] (like the stats file) */
+function loadAllLocations() {
+    if (!qdataAllPromise) {
+        qdataAllPromise = Promise.all([loadNgrams(), repeatedNgramsReady]).then(([rows]) => {
+            const counts = countByVerse(rows, qTokensD, qTokenIndexD, repeatedNgramsD, verseOfToken, true);
+            qdataAll = Array.from(counts, ([id, count]) => {
+                const year = Math.floor(id / 10000);
+                const sura_aya = ayaKeys[id % 10000];
+                const [sura, aya] = sura_aya.split(".");
+                return {century: Math.ceil(year / 100), year, sura: +sura, aya: +aya, sura_aya, count};
+            });
+            return qdataAll;
+        });
+        qdataAllPromise.catch(() => { qdataAllPromise = null; });   // (so that it can be tried again)
+    }
+    return qdataAllPromise;
+}
+
+/* The user has chosen between the first location and all locations of the quotations */
+function updateLocations() {
+    const status = d3.select("#locationsStatus");
+    if (document.getElementById("allLocationsBtn").checked && !qdataAll) {
+        status.text("Counting at all locations...");
+        loadAllLocations().then(() => { status.text(""); updateVisuals(); })
+            .catch(error => { console.error(error); status.text("The counts could not be loaded."); });
+    } else {
+        updateVisuals();
+    }
+}
+
 function updateVisuals() {
     // the verse (or its heat map, and the selected word) that is shown stays visible, with the new filters:
     const keep = {
         html: d3.select("#ayaTextDiv").html(),
         verse: currentAyaKey, heatmapVerse, selectedWord, locked: heatmapLocked, verseSura,
-        highlightedSura, highlightedVerse, suraLocked
+        highlightedSura, highlightedVerse, suraLocked, tableSelection
     };
     removeAllGraphs();
     if (keep.verse && !tableVizBtn.checked) {
@@ -131,15 +193,15 @@ function updateVisuals() {
 
     if (suraVizBtn.checked) {
         // the graph of suras ignores the aya filter:
-        createScatterPlot("#scatter1", filterArray(qdata, {aya: true}), "sura", "count", "Suras", null, 400);
+        createScatterPlot("#scatter1", filterArray(currentQdata(), {aya: true}), "sura", "count", "Suras", null, 400);
         // the verses of the sura that the user has selected (or of the only sura that the filter allows):
         const sura = (suraMin == suraMax) ? suraMin : keep.verseSura;
         if (sura && sura >= suraMin && sura <= suraMax) {
             verseSura = sura;
-            createScatterPlot("#scatter2", filterArray(qdata).filter(d => d.sura == sura), "aya", "count", "Verses", sura, 400);
+            createScatterPlot("#scatter2", filterArray(currentQdata()).filter(d => d.sura == sura), "aya", "count", "Verses", sura, 400);
         }
     } else if (ayaVizBtn.checked){
-        createScatterPlot("#scatter1", filterArray(qdata), "sura_aya", "count", "All Verses", null, 800);
+        createScatterPlot("#scatter1", filterArray(currentQdata()), "sura_aya", "count", "All Verses", null, 800);
     } else if (tableVizBtn.checked){
         buildTableViz();
     }
@@ -147,24 +209,41 @@ function updateVisuals() {
     if (keep.heatmapVerse && !tableVizBtn.checked) {
         showAyaHeatMap(keep.heatmapVerse);
     }
+    if (keep.tableSelection && !tableVizBtn.checked) {
+        showQuotationsOf(keep.tableSelection.type, keep.tableSelection.id);   // (with the new filters)
+    }
 }
 
-/* Filter the rows of a verse file (the quotations of one verse): by century, year, sura, aya
-   and the length of the quotation (in words) */
+/* Filter the rows of a verse file (the quotations of one verse): by century, year
+   and the length of the whole quotation (in words) */
 function filterVerseRows(rows) {
     const lenMin = +d3.select("#lenInputMin").property("value");
     const lenMax = +d3.select("#lenInputMax").property("value");
-    return filterArray(rows, {sura: true, aya: true}).filter(d => {
-        const len = d.ngram_length + NGRAM_LENGTH_OFFSET;
-        return len >= lenMin && len <= lenMax;
-    });
+    // (the length is the length of the whole quotation, not only of its part in this verse)
+    return filterArray(rows, {sura: true, aya: true}).filter(d => d.total >= lenMin && d.total <= lenMax);
 }
 
 
 
+/* Draw a graph of the number of quotations of suras or verses: a lollipop plot (a bar for each sura or verse)
+   or (if the "heat map" button is checked) a heat map: a column for each sura or verse, the colour is the number of quotations.
+   If "compare by century" is checked, the heat map has a row for each century and the bars are stacked by century.
+   container: "#scatter1" or "#scatter2"
+   data: the rows of the stats file (century, year, sura, aya, count), filtered
+   xVar: "sura", "aya" or "sura_aya"; yVar: "count"
+   title: "Suras", "Verses" (the verses of the sura) or "All Verses"; sura: the sura of "Verses" */
 function createScatterPlot(container, data, xVar, yVar, title, sura, width) {
+    const dataXVar = xVar;
+    // the position of a row of the stats file in the graph: the sura, the verse or the running verse number
+    const posOfRow = r => container === "#scatter2" ? r.aya : (dataXVar === "sura_aya" ? ayaTokenIndexD[r.sura_aya] : r.sura);
+    // relative numbers: the number of quotations per word of the sura or verse
+    const relative = document.getElementById("relativeBtn").checked;
+    const wordsAt = pos => container === "#scatter2" ? ayaWords[`${sura}.${pos}`]
+                         : (dataXVar === "sura_aya" ? ayaWords[ayaKeys[pos - 1]] : suraWords[pos]);
+    const valueOf = r => relative ? r.count / wordsAt(posOfRow(r)) : r.count;
+    const fmt = relative ? (v => d3.format(v < 1000 ? ".3~g" : ".3~s")(v)) : (v => v);
     // format data for the scatterplot:
-    const aggregatedData = d3.flatRollup(data, v => d3.sum(v, d => d[yVar]), d => d[xVar]);
+    const aggregatedData = d3.flatRollup(data, v => d3.sum(v, valueOf), d => d[xVar]);
     const formattedData = Array.from(aggregatedData, ([x, y]) => ({ [xVar]: x, [yVar]: y}));
     // add relevant values to the dictionary:
     if (container === "#scatter2") {
@@ -179,8 +258,16 @@ function createScatterPlot(container, data, xVar, yVar, title, sura, width) {
 
     // build the scatter plot:
     
-    const height = 400;
-    const margin = { top: 20, right: 20, bottom: 30, left: 40 };
+    // (compare by century: the heat map has a row for each century, the bars are stacked by century)
+    const compareByCentury = document.getElementById("compareCentury").checked;
+    const heatMap = document.getElementById("heatPlotBtn").checked;
+    // the centuries of the rows of a heat map or of the facets of a bar plot (without comparing: one row, one bar plot)
+    const centuries = compareByCentury ? (data.length ? d3.range(d3.min(data, r => r.century), d3.max(data, r => r.century) + 1) : [1]) : [0];
+    const panelHeight = 60;    // (compare by century: the height of the bar plot of a century and the space between them)
+    const panelGap = 6;
+    const height = heatMap ? (compareByCentury ? 400 : 70)           // (a heat map with one row is not high)
+                           : (compareByCentury ? centuries.length * (panelHeight + panelGap) - panelGap : 400);
+    const margin = { top: 20, right: 20, bottom: 30, left: heatMap ? 40 : 60 };   // (the bars have long numbers on the y axis)
     
     // build the plot's canvas:
     const root = d3.select(container)
@@ -217,58 +304,181 @@ function createScatterPlot(container, data, xVar, yVar, title, sura, width) {
             .style("display", null);
     }
     
-    // build x and y scales:
-    const x = d3.scaleLinear()
-        //.domain(d3.extent(formattedData, d => d[xVar])).nice()
-        //.domain([0, d3.max(formattedData, d => d[xVar])]).nice()
-        .domain([d3.min(formattedData, d => d[xVar])-1, d3.max(formattedData, d => d[xVar])])//.nice()
-        .range([0, width]);
-    
-    const y = d3.scaleLinear()
-        //.domain(d3.extent(formattedData, d => d[yVar])).nice()
-        //.domain([0, container=="#scatter1" ? d3.max(formattedData, d => d[yVar]) : maxAyaY]).nice()
-        .domain([0, d3.max(formattedData, d => d[yVar])])//.nice()
-        .range([height, 0]);
-    
-    
-    // add x and y axes:
+    const isSuraPlot = (title === "Suras");
 
-    // make sure X axis ticks are only integers:
-    const xAxisTicks = x.ticks()
-        .filter(tick => Number.isInteger(tick));
-    svg.append("g")
-        .attr("transform", `translate(0,${height})`)
-        .call(d3.axisBottom(x)
-          .tickValues(xAxisTicks)
-          .tickFormat(d3.format('d'))
-        );
-    
-    svg.append("g")
-        .call(d3.axisLeft(y));        
+    const heat = heatMap;
+    let x, y;               // the scales of the bars
+    let position;           // [x, y] where the hint is shown: the top of a bar, or the top of a column of a heat map
+    let binOf = null;       // heat map: the column of a position (sura number, verse number, running verse number)
+    let columnWidth;        // heat map: the width of a column
 
-    // first create the vertical lines of the lollipops:
-    svg.selectAll("myline")
-        .data(formattedData)
-        .enter()
-        .append("line")
-          .attr("x1", d => x(d[xVar]))
-          .attr("x2", d => x(d[xVar]))
-          .attr("y1", d => y(d[yVar]))
-          .attr("y2", y(0))
-          .attr("stroke", "blue")
-    
+    let barData = formattedData;     // the data of the bars (compare by century: the bars of each century)
+    let yPos = d => y(d[yVar]);      // the y position of the top of a bar
+    let yBase = () => y(0);          // the y position of the bottom of a bar
+
+    if (!heat) {
+        // build the x scale:
+        x = d3.scaleLinear()
+            .domain([d3.min(formattedData, d => d[xVar])-1, d3.max(formattedData, d => d[xVar])])//.nice()
+            .range([0, width]);
+
+        // make sure X axis ticks are only integers:
+        const xAxisTicks = x.ticks()
+            .filter(tick => Number.isInteger(tick));
+        svg.append("g")
+            .attr("transform", `translate(0,${height})`)
+            .call(d3.axisBottom(x)
+              .tickValues(xAxisTicks)
+              .tickFormat(d3.format('d'))
+            );
+
+        if (!compareByCentury) {
+            y = d3.scaleLinear()
+                .domain([0, d3.max(formattedData, d => d[yVar])])//.nice()
+                .range([height, 0]);
+            svg.append("g")
+                .call(d3.axisLeft(y));
+
+            // the vertical lines of the lollipops:
+            svg.selectAll("myline")
+                .data(formattedData)
+                .enter()
+                .append("line")
+                  .attr("x1", d => x(d[xVar]))
+                  .attr("x2", d => x(d[xVar]))
+                  .attr("y1", d => y(d[yVar]))
+                  .attr("y2", y(0))
+                  .attr("stroke", "blue")
+        } else {
+            // a bar plot for each century, above each other (the same y scale: the plots can be compared)
+            const byCentury = d3.rollup(data, v => d3.sum(v, valueOf), r => r.century, posOfRow);
+            const maxCount = d3.max(Array.from(byCentury.values(), m => d3.max(m.values()))) || 1;
+            y = d3.scaleLinear().domain([0, maxCount]).range([panelHeight, 0]);
+            const barOf = new Map(formattedData.map(d => [d[xVar], d]));
+            const panelTop = i => i * (panelHeight + panelGap);
+            barData = [];
+            centuries.forEach((century, i) => {
+                const panel = svg.append("g").attr("transform", `translate(0,${panelTop(i)})`);
+                panel.append("rect").attr("width", width).attr("height", panelHeight).attr("fill", i % 2 ? "#fff" : "#f5f8fb");
+                panel.append("g").call(d3.axisLeft(y).ticks(3).tickFormat(relative ? fmt : d3.format("~s")));
+                panel.append("text").attr("x", 4).attr("y", 11).attr("font-size", 10).attr("fill", "#555").text(`century ${century}`);
+                for (const [pos, count] of byCentury.get(century) || []) {
+                    barData.push({...barOf.get(pos), [yVar]: count, panel: i, century});
+                    panel.append("line")
+                        .attr("x1", x(pos)).attr("x2", x(pos))
+                        .attr("y1", y(count)).attr("y2", y(0))
+                        .attr("stroke", "blue");
+                }
+            });
+            yPos = d => panelTop(d.panel) + y(d[yVar]);
+            yBase = d => panelTop(d.panel) + y(0);
+        }
+        position = d => [x(d[xVar]), yPos(d)];
+    } else {
+        // a heat map: a column for each sura or verse (a column for several verses if there are more than pixels),
+        // a row for each century, the colour is the number of quotations
+        const positions = formattedData.map(d => d[xVar]);
+        const pos0 = d3.min(positions);
+        const pos1 = d3.max(positions);
+        const binSize = Math.max(1, Math.ceil((pos1 - pos0 + 1) / width));
+        const nBins = Math.floor((pos1 - pos0) / binSize) + 1;
+        columnWidth = width / nBins;
+        binOf = pos => Math.floor((pos - pos0) / binSize);
+        // (relative numbers: the number of words of the suras or verses of a column)
+        const wordsOfColumn = b => d3.sum(d3.range(pos0 + b * binSize, Math.min(pos1, pos0 + (b + 1) * binSize - 1) + 1), wordsAt);
+
+        // the sura or verse that represents a column: the one with the most quotations
+        const reps = new Map();
+        formattedData.forEach(d => {
+            const b = binOf(d[xVar]);
+            if (!reps.has(b) || d[yVar] > reps.get(b)[yVar]) reps.set(b, d);
+        });
+        const columns = Array.from(reps, ([b, d]) => ({...d, colId: b}));
+
+        // the number of quotations per column and century:
+        // (only the centuries of the filtered data: the y axis follows the century and year filters)
+        // (without "compare by century" there is one row)
+        const rowOf = compareByCentury ? (r => r.century) : (() => 0);
+        const cells = [];
+        for (const [b, byCentury] of d3.rollup(data, v => d3.sum(v, r => r.count), r => binOf(posOfRow(r)), rowOf)) {
+            for (const [century, count] of byCentury) {
+                cells.push({colId: b, century, count: relative ? count / wordsOfColumn(b) : count, rep: reps.get(b)});
+            }
+        }
+        const maxCount = d3.max(cells, c => c.count) || 1;
+        // (a few suras and verses have many more quotations than the rest: the colour scale is logarithmic)
+        const color = d3.scaleSequentialSymlog(d3.interpolateYlOrRd).domain([0, maxCount]);
+
+        const xs = d3.scaleLinear().domain([pos0 - 0.5, pos0 - 0.5 + nBins * binSize]).range([0, width]);
+        const yb = d3.scaleBand().domain(centuries).range([0, height]);
+        svg.append("g").attr("transform", `translate(0,${height})`)
+            .call(d3.axisBottom(xs).tickValues(xs.ticks().filter(Number.isInteger)).tickFormat(d3.format("d")));
+        if (compareByCentury) {
+            svg.append("g").call(d3.axisLeft(yb));
+            svg.append("text").attr("transform", "rotate(-90)").attr("x", -height / 2).attr("y", -30)
+                .attr("text-anchor", "middle").attr("font-size", 11).attr("fill", "#555").text("century");
+        }
+
+        const label = d => {
+            if (isSuraPlot) return `sura ${d.sura} ${SURA_NAMES[d.sura - 1]}`;
+            return (binSize > 1 ? "verses around " : "verse ") + d.sura_aya;
+        };
+        svg.append("rect").attr("width", width).attr("height", height).attr("fill", "#f3f3f3");
+        svg.selectAll(".cell").data(cells).enter().append("rect")
+            .attr("class", "cell")
+            .attr("x", c => c.colId * columnWidth)
+            .attr("y", c => yb(c.century))
+            .attr("width", Math.max(columnWidth, 1))
+            .attr("height", yb.bandwidth())
+            .attr("fill", c => color(c.count))
+            .style("pointer-events", "none")
+            .append("title").text(c => `${label(c.rep)}${compareByCentury ? `, century ${c.century}` : ""}: ${fmt(c.count)}`);
+
+        // a legend in the top margin: the colour scale:
+        const gradient = root.append("defs").append("linearGradient").attr("id", `legend-${container.slice(1)}`);
+        d3.range(0, 1.01, 0.1).forEach(t => gradient.append("stop")
+            .attr("offset", `${t * 100}%`).attr("stop-color", color(Math.expm1(t * Math.log1p(maxCount)))));
+        const legendWidth = 70;
+        svg.append("rect").attr("x", width - legendWidth - 30).attr("y", -15).attr("width", legendWidth).attr("height", 8)
+            .attr("fill", `url(#legend-${container.slice(1)})`);
+        svg.append("text").attr("x", width - legendWidth - 34).attr("y", -8).attr("text-anchor", "end").attr("font-size", 10).text("0");
+        svg.append("text").attr("x", width - 26).attr("y", -8).attr("font-size", 10).text(fmt(maxCount));
+
+        // the columns: invisible areas on top of the cells to hover over and click on
+        svg.selectAll(".hitcol").data(columns).enter().append("rect")
+            .attr("class", "hitcol")
+            .attr("x", d => d.colId * columnWidth)
+            .attr("y", 0)
+            .attr("width", Math.max(columnWidth, 1))
+            .attr("height", height)
+            .style("fill", "transparent")
+            .style("cursor", "pointer");
+        position = d => [d.colId * columnWidth + columnWidth / 2, 12];
+    }
+
     // The mouse handlers are shared by the dots and by the (wide, invisible) lines of the bars,
     // so that a bar can be selected by hovering over it or clicking on it, not only its top.
     // Hovering is disabled after a click on a bar (until the user clicks in the graph):
-    const isSuraPlot = (title === "Suras");
     function isLocked() { return isSuraPlot ? suraLocked : heatmapLocked; }
     function setLocked(value) { if (isSuraPlot) { suraLocked = value; } else { heatmapLocked = value; } }
 
     // the circle of a bar (only the circles of this graph: the other graph has its own selected bar):
-    const dotOf = d => svg.selectAll(".dot").filter(e => e === d);
+    const sameBar = (e, d) => isSuraPlot ? e.sura === d.sura : e.sura_aya === d.sura_aya;
+    const dotOf = d => svg.selectAll(heat ? ".hitcol" : ".dot").filter(e => heat ? e.colId === d.colId : sameBar(e, d));
+    function showSelected(selection) {
+        if (heat) {
+            selection.style("fill", "rgba(255, 0, 0, 0.12)").style("stroke", "red");
+        } else {
+            selection.style("fill", "red").style("opacity", 0.5);
+        }
+    }
     function highlight(d) {
-        svg.selectAll(".dot").style("fill", "blue").style("opacity", 0);
-        dotOf(d).style("fill", "red").style("opacity", 0.5);
+        if (heat) {
+            svg.selectAll(".hitcol").style("fill", "transparent").style("stroke", "none");
+        } else {
+            svg.selectAll(".dot").style("fill", "blue").style("opacity", 0);
+        }
+        showSelected(dotOf(d));
         if (isSuraPlot) { highlightedSura = d.sura; } else { highlightedVerse = d.sura_aya; }
     }
 
@@ -313,60 +523,83 @@ function createScatterPlot(container, data, xVar, yVar, title, sura, width) {
         } else {
             // show the text of the verse (the heat map is shown when the bar is clicked):
             showAya(d.sura_aya);
-            showHint(x(d[xVar]), y(d[yVar]));
+            showHint(...position(d));
         }
     }
 
-    // the wide, invisible lines on top of the visible lines of the bars:
-    svg.selectAll(".hitline")
-        .data(formattedData)
-        .enter()
-        .append("line")
-            .attr("class", "hitline")
-            .attr("x1", d => x(d[xVar]))
-            .attr("x2", d => x(d[xVar]))
-            .attr("y1", d => y(d[yVar]))
-            .attr("y2", y(0))
-            .attr("stroke", "transparent")
-            .attr("stroke-width", 10)
-            .style("pointer-events", "stroke")
-            .style("cursor", "pointer")
+    if (heat) {
+        svg.selectAll(".hitcol")
             .on("mouseover", onMouseOver)
             .on("mouseout", () => hint.style("display", "none"))
             .on("click", onClick);
+    } else {
+        // the wide, invisible lines on top of the visible lines of the bars:
+        svg.selectAll(".hitline")
+            .data(barData)
+            .enter()
+            .append("line")
+                .attr("class", "hitline")
+                .attr("x1", d => x(d[xVar]))
+                .attr("x2", d => x(d[xVar]))
+                .attr("y1", yPos)
+                .attr("y2", yBase)
+                .attr("stroke", "transparent")
+                .attr("stroke-width", 10)
+                .style("pointer-events", "stroke")
+                .style("cursor", "pointer")
+                .on("mouseover", onMouseOver)
+                .on("mouseout", () => hint.style("display", "none"))
+                .on("click", onClick);
 
-    // then the circles:
-    svg.selectAll(".dot")
-        .data(formattedData)
-        .enter()
-        .append("circle")
-            .attr("class", "dot")
-            .attr("cx", d => x(d[xVar]))
-            .attr("cy", d => y(d[yVar]))
-            .attr("r", 5)
-            .style("fill", "blue")
-            .style("opacity", 0)
-            .style("cursor", "pointer")
-            .on("mouseover", onMouseOver)
-            .on("mouseout", () => hint.style("display", "none"))
-            .on("click", onClick);
+        // then the circles:
+        svg.selectAll(".dot")
+            .data(barData)
+            .enter()
+            .append("circle")
+                .attr("class", "dot")
+                .attr("cx", d => x(d[xVar]))
+                .attr("cy", yPos)
+                .attr("r", 5)
+                .style("fill", "blue")
+                .style("opacity", 0)
+                .style("cursor", "pointer")
+                .on("mouseover", onMouseOver)
+                .on("mouseout", () => hint.style("display", "none"))
+                .on("click", onClick);
+    }
 
     // the sura or verse that was selected before the graph was drawn again stays highlighted:
     const selected = isSuraPlot ? highlightedSura : highlightedVerse;
     if (selected !== null) {
-        svg.selectAll(".dot").filter(d => (isSuraPlot ? d.sura : d.sura_aya) == selected)
-            .style("fill", "red").style("opacity", 0.5);
+        if (heat) {
+            // (the column that contains the sura or verse)
+            let selectedPosition = null;
+            if (isSuraPlot) {
+                selectedPosition = selected;
+            } else if (container === "#scatter2") {
+                const [selectedSura, selectedAya] = selected.split(".");
+                selectedPosition = (selectedSura == sura) ? +selectedAya : null;
+            } else {
+                selectedPosition = ayaTokenIndexD[selected];
+            }
+            if (selectedPosition !== null) {
+                showSelected(svg.selectAll(".hitcol").filter(d => d.colId === binOf(selectedPosition)));
+            }
+        } else {
+            showSelected(svg.selectAll(".dot").filter(d => (isSuraPlot ? d.sura : d.sura_aya) == selected));
+        }
     }
 
     // add the title to the graph:
+    const aboveGraph = heat || compareByCentury;
     if (title == "Verses") {
-        title = "Verses in sura "+sura;
+        title = `Verses in sura ${sura} - ${SURA_NAMES[sura - 1]}`;
     }
     svg.append("text")
-        .attr("x", width / 2)
-        .attr("y", margin.top)
-        .attr("text-anchor", "middle")
-        .text(title);
+        .attr("x", aboveGraph ? 0 : width / 2)
+        .attr("y", aboveGraph ? -6 : margin.top)   // (a heat map or the bar plots of the centuries cover the top of the graph: the title is above it)
+        .attr("text-anchor", aboveGraph ? "start" : "middle")
+        .text(relative ? `${title} (quotations per word)` : title);
 
     // draw the hint on top of the lines and dots:
     hint.raise();
@@ -383,18 +616,18 @@ function filterScatter2(clickedDotD) {
         verseSura = clickedDotD.sura;
         highlightedVerse = null;
     }
-    const filteredData = filterArray(qdata).filter(d => d.sura == clickedDotD.sura);
+    const filteredData = filterArray(currentQdata()).filter(d => d.sura == clickedDotD.sura);
     createScatterPlot("#scatter2", filteredData, "aya", "count", "Verses", clickedDotD.sura, 400);
 }
 
 function buildSuraLevelViz(){
     removeAllGraphs()
-    createScatterPlot("#scatter1", qdata, "sura", "count", "Suras", null, 400);
+    createScatterPlot("#scatter1", filterArray(currentQdata(), {aya: true}), "sura", "count", "Suras", null, 400);
 }
 
 function buildAyaLevelViz() {
     removeAllGraphs()
-    createScatterPlot("#scatter1", qdata, "sura_aya", "count", "All Verses", null, 800);
+    createScatterPlot("#scatter1", filterArray(currentQdata()), "sura_aya", "count", "All Verses", null, 800);
 }
 
 function filterNgrams(data) {
@@ -505,6 +738,7 @@ function buildTable(data){
    type: "sura" or "verse"
    id: the number of the sura ("2") or the verse ("2.255") */
 function showQuotationsOf(type, id){
+    tableSelection = {type, id};
     const thisSelection = ++selectionCounter;
     const range = (type === "sura") ? quranRanges.suras[id] : quranRanges.verses[id];
     const name = (type === "sura") ? `sura ${id}` : `verse ${id}`;
@@ -566,10 +800,16 @@ const NGRAM_LENGTH_OFFSET = 0;
 
 var ayaDataCache = new Map();   // "sura.aya": promise of the rows of the file of that verse
 var currentAyaKey = null;       // the verse that is shown below the plot
+var verseOfToken = [];            // token index in the Qurʾān: index of its verse (in ayaKeys)
+var qdataAll = null;              // like qdata, but a quotation is counted at all its locations in the Qurʾān (see loadAllLocations)
+var qdataAllPromise = null;
+var ayaWords = new Object();      // sura.aya: number of words of the verse
+var suraWords = new Object();     // sura: number of words of the sura
 var ayasInSura = new Object();  // sura: number of verses in the sura
 var highlightedSura = null;     // the sura whose circle is red in the graph of suras
 var highlightedVerse = null;    // the verse ("sura.aya") whose circle is red in the graph of verses
 var suraLocked = false;         // True after a click on a bar of the graph of suras (hovering is disabled)
+var tableSelection = null;      // {type, id} of the sura or verse of which the quotations are in the table (see showQuotationsOf)
 var verseSura = null;           // the sura of which the verses are shown in the second graph (sura-level view)
 var heatmapVerse = null;        // the verse of which the heat map is shown
 var selectedWord = null;        // the word of that verse that the user has clicked on (number of the word in the verse)
@@ -596,6 +836,27 @@ function loadAyaData(sura, aya) {
     return ayaDataCache.get(key);
 }
 
+var ayaKeys = [];                       // all verses ("sura.aya") in the order of the Qurʾān
+var resolvedAyaDataCache = new Map();   // "sura.aya": promise of the rows of the verse with the whole quotations
+
+/* Load (once) the quotations of a verse, with the whole quotation of each row (qstart, qend, total):
+   a quotation of several verses has a row in the file of each of its verses (see resolveWholeQuotations) */
+function loadResolvedAyaData(sura, aya) {
+    const key = `${sura}.${aya}`;
+    if (!resolvedAyaDataCache.has(key)) {
+        const promise = loadAyaData(sura, aya).then(rows => resolveWholeQuotations(key, rows, {
+            loadRows: v => loadAyaData(...v.split(".")),
+            neighbour: (v, dir) => ayaKeys[ayaTokenIndexD[v] - 1 + dir] || null,
+            nWords: v => ayaTextD[v].split(" ").length,
+            firstToken: v => quranRanges.verses[v][0],
+            lengthOffset: NGRAM_LENGTH_OFFSET,
+        }));
+        promise.catch(() => resolvedAyaDataCache.delete(key));   // (so that it can be tried again)
+        resolvedAyaDataCache.set(key, promise);
+    }
+    return resolvedAyaDataCache.get(key);
+}
+
 /* Show the text of a verse (when the mouse is over the dot at the top of its bar) */
 function showAya(suraAya) {
     if (currentAyaKey === suraAya) {
@@ -617,7 +878,7 @@ function showAyaHeatMap(suraAya) {
     const [sura, aya] = suraAya.split(".");
     showAya(suraAya);   // (does nothing if the verse is shown already)
     d3.select("#heatmapStatus").text("Loading the heat map...");
-    loadAyaData(sura, aya).then(rows => {
+    loadResolvedAyaData(sura, aya).then(rows => {
         if (currentAyaKey !== suraAya) {
             return;   // the mouse has moved to another verse in the meantime
         }
@@ -655,12 +916,15 @@ function loadTextIds() {
     return textIdsPromise;
 }
 
-/* The words of a verse that a quotation (see quotationsAtWord) covers, with "..." where it continues in another verse */
-function quotationTextInVerse(suraAya, q) {
-    const words = ayaTextD[suraAya].split(" ");
-    const first = Math.max(q.start, 1);
-    const last = Math.min(q.start + q.length - 1, words.length);
-    return (q.start < 1 ? "... " : "") + words.slice(first - 1, last).join(" ") + (q.start + q.length - 1 > words.length ? " ..." : "");
+/* The whole quotation (see quotationsAtWord) as html: the words that are not in the verse are grey */
+function quotationHtml(suraAya, q) {
+    const [first, last] = quranRanges.verses[suraAya];
+    let html = "";
+    for (let i = q.qstart; i <= q.qend; i++) {
+        const word = qTokensD[i][0];
+        html += (i < first || i > last) ? `<span style="color: #999">${word}</span> ` : `${word} `;
+    }
+    return html.trimEnd();
 }
 
 /* Show the quotations of a verse that contain a word (after a click on the word in the heat map),
@@ -670,11 +934,12 @@ function showQuotationsOfWord(suraAya, rows, word) {
     const quotations = quotationsAtWord(rows, word, NGRAM_LENGTH_OFFSET);
     const words = ayaTextD[suraAya].split(" ");
     let html = `<p>Quotations of verse ${suraAya} that contain the word <span dir="rtl">${words[word - 1]}</span> ` +
-               `(${quotations.length} quotations; click on a quotation to see the texts in which it is cited):</p>`;
+               `(${quotations.length} quotations; words in grey are in the neighbouring verses; ` +
+               `click on a quotation to see the texts in which it is cited):</p>`;
     html += '<table dir="rtl"><tr><th>Quoted Quran text</th><th>times cited</th><th>texts</th></tr>';
     quotations.forEach((q, i) => {
         html += `<tr class="quotationRow" data-i="${i}" style="cursor: pointer">` +
-                `<td>${quotationTextInVerse(suraAya, q)}</td><td>${q.count}</td><td>${q.nTexts}</td></tr>`;
+                `<td>${quotationHtml(suraAya, q)}</td><td>${q.count}</td><td>${q.nTexts}</td></tr>`;
     });
     html += '</table>';
     d3.select("#wordDetails").html(html);
@@ -715,7 +980,7 @@ function describeActiveFilters() {
 
 /* Show the texts in which a quotation of a verse is cited (earliest first) in the table cell */
 function showTextsOfQuotation(suraAya, rows, q, div) {
-    const texts = textsOfQuotation(rows, q.start, q.length, NGRAM_LENGTH_OFFSET);
+    const texts = textsOfQuotation(rows, q.qstart, q.qend);
     div.html("<p>Loading...</p>");
     loadTextIds().then(textIds => {
         const filters = describeActiveFilters();
@@ -817,12 +1082,16 @@ d3.dsv("\t", allStatsFp).then(function(data) {
             let d = qtext[i];
             let suraAya = `${d.sura}.${d.aya}`
             ayaTokenIndexD[suraAya] = i+1;
+            ayaKeys.push(suraAya);
+            ayaWords[suraAya] = d.aya_text.split(" ").length;
+            suraWords[d.sura] = (suraWords[d.sura] || 0) + ayaWords[suraAya];
             ayasInSura[d.sura] = Math.max(ayasInSura[d.sura] || 0, +d.aya);
             ayaTextD[suraAya] = d.aya_text;
             let ayaTokens = d.aya_text.split(" ");
             for (let j=0; j<ayaTokens.length; j++) {
                 qTokensD[qtoken] = [ayaTokens[j], `${suraAya}.${j + 1}`];
                 qTokenIndexD[`${suraAya}.${j + 1}`] = qtoken;
+                verseOfToken.push(i);
                 qtoken += 1
             }
         }
@@ -836,6 +1105,8 @@ d3.dsv("\t", allStatsFp).then(function(data) {
             repeatedNgramsD = data["data"];
             repeatedLookupD = buildRepeatedLookup(repeatedNgramsD);
         });
+        // "all locations" is the default: the graphs are drawn again when the counts are ready
+        updateLocations();
 
     });
 });

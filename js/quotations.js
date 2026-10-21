@@ -144,42 +144,156 @@ function filterQuotationsByRange(quotations, repeatedNgramsD, qTokenIndexD, firs
     return result;
 }
 
+/* A row of a verse file is the part of a quotation that is in the verse: a quotation of several verses has
+   a row in the file of each of its verses. These functions find the whole quotation:
+   the first and the last word (token index in the Qurʾān: qstart and qend) and the number of words (total).
+   The other parts of a quotation are found in the files of the neighbouring verses: they have the same text,
+   the same place in the text (text_id, text_tok_start, text_tok_end) and they start or end at the border of the verse. */
+
+/* The identity of a citation: the place in the text that cites the Qurʾān */
+function textKey(d) {
+    return `${d.text_id}.${d.text_tok_start}.${d.text_tok_end}`;
+}
+
+/* The words of a row that are in the verse: {first, last} (the first word of the verse is 1) */
+function segmentOf(d, nWords, lengthOffset) {
+    const length = d.ngram_length + lengthOffset;
+    return {first: Math.max(d.ngram_start, 1), last: Math.min(d.ngram_start + length - 1, nWords)};
+}
+
+/* The parts of quotations in a neighbouring verse: the rows of the neighbouring verse that continue
+   the quotations (of the verse that the user is looking at) that are looked for.
+   neighbourRows: the rows of the neighbouring verse
+   wanted: Map: textKey -> the number of words of the quotation that are not found yet
+   dir: 1: the neighbour is the next verse (the quotation continues at its first word);
+        -1: the neighbour is the previous verse (the quotation continues up to its last word)
+   nWords: the number of words of the neighbouring verse
+   Returns: Map: textKey -> {words: the number of words in the neighbouring verse,
+                             continues: whether the quotation may continue in the verse after it} */
+function continuationSegments(neighbourRows, wanted, dir, nWords, lengthOffset) {
+    const found = new Map();
+    for (const d of neighbourRows) {
+        const key = textKey(d);
+        if (!wanted.has(key)) continue;
+        const seg = segmentOf(d, nWords, lengthOffset);
+        const words = seg.last - seg.first + 1;
+        if (words < 1 || words > wanted.get(key)) continue;
+        if (dir > 0 ? seg.first !== 1 : seg.last !== nWords) continue;   // (it does not continue the quotation)
+        const continues = dir > 0 ? seg.last === nWords : seg.first === 1;
+        if (!found.has(key) || found.get(key).words < words) {
+            found.set(key, {words, continues});
+        }
+    }
+    return found;
+}
+
+/* Find the whole quotation of each row of a verse file: add qstart, qend and total to the rows.
+   (The text span of a row, text_tok_end - text_tok_start + 1, is the number of words of the whole quotation
+   if the text cites the Qurʾān without omissions; the words that are not in this verse must be in the
+   neighbouring verses.)
+   verse: "<sura>.<aya>"; rows: the rows of its file (ngram_start, ngram_length, text_id, text_tok_start, text_tok_end)
+   deps: {loadRows(verse): promise of the rows of the file of a verse,
+          neighbour(verse, dir): the previous (dir -1) or the next (dir 1) verse (null if there is none),
+          nWords(verse): the number of words of the verse,
+          firstToken(verse): the token index of its first word in the Qurʾān,
+          lengthOffset: see tokenCounts} */
+async function resolveWholeQuotations(verse, rows, deps) {
+    if (rows.length === 0 || rows[0].qstart !== undefined) {
+        return rows;   // (nothing to do, or done already)
+    }
+    const {loadRows, neighbour, nWords, firstToken, lengthOffset} = deps;
+    const n = nWords(verse);
+    const first = firstToken(verse);
+    const wantedBack = new Map();
+    const wantedFwd = new Map();
+    const info = rows.map(d => {
+        const seg = segmentOf(d, n, lengthOffset);
+        const textLength = d.text_tok_start === undefined ? 0 : (+d.text_tok_end) - (+d.text_tok_start) + 1;
+        // a row that starts before the verse (ngram_start < 1) says how many words precede the verse:
+        const known = d.ngram_start < 1 ? 1 - d.ngram_start : 0;
+        const rest = textLength - (seg.last - seg.first + 1) - known;   // words that are not found yet
+        const key = textKey(d);
+        if (rest > 0 && seg.first === 1) wantedBack.set(key, Math.max(rest, wantedBack.get(key) || 0));
+        if (rest > 0 && seg.last === n) wantedFwd.set(key, Math.max(rest, wantedFwd.get(key) || 0));
+        return {seg, known, rest, key};
+    });
+
+    // follow the quotations in the neighbouring verses, as long as they continue:
+    async function follow(dir, wanted) {
+        const found = new Map();
+        let v = wanted.size ? neighbour(verse, dir) : null;
+        while (v && wanted.size) {
+            let neighbourRows;
+            try {
+                neighbourRows = await loadRows(v);
+            } catch (error) {
+                break;
+            }
+            const segments = continuationSegments(neighbourRows, wanted, dir, nWords(v), lengthOffset);
+            const next = new Map();
+            for (const [key, {words, continues}] of segments) {
+                found.set(key, (found.get(key) || 0) + words);
+                const rest = wanted.get(key) - words;
+                if (continues && rest > 0) next.set(key, rest);
+            }
+            wanted = next;
+            v = neighbour(v, dir);
+        }
+        return found;
+    }
+    const backFound = await follow(-1, wantedBack);
+    const fwdFound = await follow(1, wantedFwd);
+
+    rows.forEach((d, i) => {
+        const {seg, known, rest, key} = info[i];
+        let back = seg.first === 1 ? (backFound.get(key) || 0) : 0;
+        let fwd = seg.last === n ? (fwdFound.get(key) || 0) : 0;
+        if (back + fwd > rest) {   // (not clear on which side the rest is: keep the longest part)
+            if (back >= fwd) { fwd = 0; } else { back = 0; }
+        }
+        d.qstart = first + seg.first - 1 - known - back;
+        d.qend = first + seg.last - 1 + fwd;
+        d.total = d.qend - d.qstart + 1;
+    });
+    return rows;
+}
+
 /* The quotations of a verse that contain a word of the verse (a click on the word in the heat map).
-   The rows of the same quotation (the same ngram_start and ngram_length: the same words of the verse,
+   The rows of the same quotation (the same whole quotation: qstart and qend, see resolveWholeQuotations;
    quoted in different texts or in different places of a text) are grouped.
-   rows: the rows of the verse file (ngram_start and ngram_length as numbers)
+   rows: the rows of the verse file (ngram_start and ngram_length as numbers, qstart and qend)
    word: the number of the word in the verse (the first word is 1)
    lengthOffset: see tokenCounts
-   Returns: [{start, length, count, nTexts}, ...] sorted by frequency (count: the number of rows;
-       nTexts: the number of different texts), then by length (the longest first) */
+   Returns: [{qstart, qend, length, count, nTexts}, ...] sorted by frequency (count: the number of rows;
+       nTexts: the number of different texts; length: the number of words of the whole quotation),
+       then by length (the longest first) */
 function quotationsAtWord(rows, word, lengthOffset) {
     const groups = new Map();
     for (const d of rows) {
         const length = d.ngram_length + lengthOffset;
         if (d.ngram_start <= word && word <= d.ngram_start + length - 1) {
-            const id = `${d.ngram_start}.${d.ngram_length}`;
+            const id = `${d.qstart}.${d.qend}`;
             if (!groups.has(id)) {
-                groups.set(id, {start: d.ngram_start, length, count: 0, texts: new Set()});
+                groups.set(id, {qstart: d.qstart, qend: d.qend, count: 0, texts: new Set()});
             }
             const g = groups.get(id);
             g.count += 1;
             g.texts.add(d.text_id);
         }
     }
-    return Array.from(groups.values(), g => ({start: g.start, length: g.length, count: g.count, nTexts: g.texts.size}))
-        .sort((a, b) => b.count - a.count || b.length - a.length || a.start - b.start);
+    return Array.from(groups.values(), g => ({qstart: g.qstart, qend: g.qend, length: g.qend - g.qstart + 1,
+                                              count: g.count, nTexts: g.texts.size}))
+        .sort((a, b) => b.count - a.count || b.length - a.length || a.qstart - b.qstart);
 }
 
-/* The texts in which a quotation of a verse (the same words of the verse) is cited.
-   rows: the rows of the verse file (ngram_start, ngram_length, text_id, year as numbers/strings)
-   start, length: ngram_start and the number of words of the quotation (see quotationsAtWord)
-   lengthOffset: see tokenCounts
+/* The texts in which a quotation of a verse (the same whole quotation) is cited.
+   rows: the rows of the verse file (qstart, qend, text_id, year as numbers/strings)
    Returns: [{textId, year, century, count}, ...] sorted by year (the earliest first), then by text id;
        count: the number of times the text cites the quotation */
-function textsOfQuotation(rows, start, length, lengthOffset) {
+function textsOfQuotation(rows, qstart, qend) {
     const texts = new Map();
     for (const d of rows) {
-        if (d.ngram_start === start && d.ngram_length + lengthOffset === length) {
+        if (d.qstart === qstart && d.qend === qend) {
             if (!texts.has(d.text_id)) {
                 texts.set(d.text_id, {textId: d.text_id, year: d.year, century: d.century, count: 0});
             }
@@ -189,8 +303,42 @@ function textsOfQuotation(rows, start, length, lengthOffset) {
     return Array.from(texts.values()).sort((a, b) => a.year - b.year || +a.textId - +b.textId);
 }
 
+/* Count the quotations per verse and year (for the graphs of suras and verses).
+   A quotation of several verses is counted in each of its verses. The rows are the quotations at their first
+   location in the Qurʾān; a quotation that occurs in several places in the Qurʾān (for example the basmala) is
+   counted in each place if allLocations is true (the other places are in the dictionary of the repeated ngrams).
+   rows: [{start_token, end_token, year, count}, ...] (the rows of @ngrams_count: token indexes in the Qurʾān)
+   repeatedNgramsD: key of the first appearance of a quotation: keys of its other appearances
+   verseOfToken: the index of the verse of each token index in the Qurʾān (the first verse is 0)
+   Returns: a Map: year * 10000 + the index of the verse -> the number of quotations */
+function countByVerse(rows, qTokensD, qTokenIndexD, repeatedNgramsD, verseOfToken, allLocations) {
+    const counts = new Map();
+    const add = (year, first, last, count) => {
+        for (let v = verseOfToken[first]; v <= verseOfToken[last]; v++) {
+            const id = year * 10000 + v;
+            counts.set(id, (counts.get(id) || 0) + count);
+        }
+    };
+    for (const d of rows) {
+        if (!(d.end_token in qTokensD) || !(d.start_token in qTokensD)) continue;
+        add(d.year, d.start_token, d.end_token, d.count);
+        if (allLocations) {
+            const others = repeatedNgramsD[quotationKey(qTokensD, d.start_token, d.end_token)];
+            if (others) {
+                const n = d.end_token - d.start_token + 1;
+                for (const location of others) {
+                    const end = qTokenIndexD[location];
+                    if (end !== undefined && end - n + 1 >= 0) add(d.year, end - n + 1, end, d.count);
+                }
+            }
+        }
+    }
+    return counts;
+}
+
 if (typeof module !== "undefined" && module.exports) {
     module.exports = {quotationKey, buildRepeatedLookup, canonicalKey, parseQuotationKey, mergeQuotations, tokenCounts,
                       buildRanges, appearancesOf, filterQuotationsByRange,
-                      quotationsAtWord, textsOfQuotation};
+                      textKey, segmentOf, continuationSegments, resolveWholeQuotations,
+                      quotationsAtWord, textsOfQuotation, countByVerse};
 }
