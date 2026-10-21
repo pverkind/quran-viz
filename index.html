@@ -147,20 +147,6 @@
     <h2>Filters</h2>
     <div class="filter-grid">
     <div class="filter">
-        <span class="filter-label">Century:</span>
-        <span>from</span>
-        <input type="text" id="centuryInputMin" min="1" max="15" value="1">
-        <span>to</span>
-        <input type="text" id="centuryInputMax" min="1" max="15" value="15">
-    </div>
-    <div class="filter">
-        <span class="filter-label">Year (AH):</span>
-        <span>from</span>
-        <input type="text" id="yearInputMin" min="1" max="1450" value="1">
-        <span>to</span>
-        <input type="text" id="yearInputMax" min="1" max="1450" value="1450">
-    </div>
-    <div class="filter">
         <span class="filter-label">Sura:</span>
         <span>from</span>
         <input type="text" id="suraInputMin" min="1" max="114" value="1">
@@ -174,12 +160,26 @@
         <span>to</span>
         <input type="text" id="ayaInputMax" min="1" max="286" value="286">
     </div>
-    <div class="filter" title="This filter only applies to the quotation-level table">
+    <div class="filter" title="Length in words. This filter applies to the quotation tables and the heat map, not to the bar graphs">
         <span class="filter-label greyed">Quotation length:</span>
         <span class="greyed">from</span>
         <input type="text" id="lenInputMin" min="1" max="300" value="1">
         <span class="greyed">to</span>
         <input type="text" id="lenInputMax" min="1" max="300" value="300">
+    </div>
+    <div class="filter">
+        <span class="filter-label">Century:</span>
+        <span>from</span>
+        <input type="text" id="centuryInputMin" min="1" max="15" value="1">
+        <span>to</span>
+        <input type="text" id="centuryInputMax" min="1" max="15" value="15">
+    </div>
+    <div class="filter">
+        <span class="filter-label">Year (AH):</span>
+        <span>from</span>
+        <input type="text" id="yearInputMin" min="1" max="1450" value="1">
+        <span>to</span>
+        <input type="text" id="yearInputMax" min="1" max="1450" value="1450">
     </div>
     <div class="filter">
         <input id="resetFiltersBtn" type="button" value="Reset filters">
