@@ -32,6 +32,9 @@ var qTokenIndexD = new Object();     // sura.aya.ayatokindex: token index in Qur
 var repeatedNgramsD = new Object();  // key of the first appearance of an ngram: keys of the other appearances
 var repeatedLookupD = new Object();  // key of each appearance of a repeated ngram: key of its first appearance
 var repeatedNgramsReady;             // promise: the repeated ngrams have been loaded
+var quranRanges;                     // first and last token index of each verse and sura (see buildRanges)
+var ngramsPromise;                   // promise: the quotations of @ngrams_count have been loaded
+var selectionCounter = 0;            // to ignore the result of an older selection if the user has clicked again
 
 
 function setupFilters() {
@@ -64,6 +67,7 @@ function removeAllGraphs(){
     d3.select("#ayaTextDiv").html("");
     currentAyaKey = null;
     heatmapLocked = false;
+    selectionCounter++;   // (ignore a table that is still loading)
     d3.select("#table div").remove();
 }
 
@@ -226,6 +230,8 @@ function createScatterPlot(container, data, xVar, yVar, title, sura, width) {
             .on("mouseout", () => hint.style("display", "none"))
             .on("click", function(event, d) {
                 if (title === "Suras") {
+                    // clicking on a sura shows the quotations of the sura in the table:
+                    showQuotationsOf("sura", d.sura);
                     return;
                 }
                 hint.style("display", "none");
@@ -240,6 +246,7 @@ function createScatterPlot(container, data, xVar, yVar, title, sura, width) {
                     heatmapLocked = true;
                     event.stopPropagation();
                     showAyaHeatMap(d.sura_aya);
+                    showQuotationsOf("verse", d.sura_aya);
                 }
             });
 
@@ -340,23 +347,42 @@ function getAllSuras(key){
     return suraAya;
 }
 
-function buildTable(data){
-    console.log("Filtering data for the quotation-level table")
-    const filteredData = filterNgrams(data);
-    // merge the rows of the same quotation at different locations in the Quran
-    // (e.g. the basmala at the start of sura 1 and at the start of sura 2),
-    // and sum up the counts: [{key: key of the first appearance of the quotation, count: count}, ...]
-    // sorted by frequency:
-    const merged = mergeQuotations(filteredData, qTokensD, repeatedLookupD);
-    // keep only the top 300 quotations:
-    // and convert the keys into the text of the quotation, the verse(s) and the frequency:
-    const top = merged.slice(0,300).map(q => {
-        const ngram = parseQuotationKey(q.key, qTokenIndexD);
-        return [quranTextFromIndices(ngram.start, ngram.end), getAllSuras(q.key), q.count];
+/* The verses of the appearances of a quotation that are in a part of the Qurʾān (a sura or a verse), as html.
+   appearances: see filterQuotationsByRange */
+function getVersesInPart(appearances){
+    const verses = [];
+    appearances.forEach(a => {
+        const v = a.location.split(".").slice(0,2).join(".");
+        if (!verses.includes(v)) {
+            verses.push(v);
+        }
     });
-    // build the caption:
-    let caption = `<p>Displaying the 300 most frequent quotations (out of ${merged.length} that agree with the filters; the same quotation in different verses is counted as one):</p>`
-    // build the table html:
+    let html = `<span class="ttanchor" title="${ayaTextD[verses[0]]}">${verses[0]}</span>`;
+    if (verses.length > 1) {
+        const others = verses.slice(1);
+        html += `<br><span class="ttanchor" dir="ltr" title="${others.join(', ')}">(and ${others.length} more here)</span>`;
+    }
+    return html;
+}
+
+/* Merge the rows of the same quotation at different locations in the Quran
+   (e.g. the basmala at the start of sura 1 and at the start of sura 2), and sum up the counts:
+   [{key: key of the first appearance of the quotation, count: count}, ...] sorted by frequency */
+function mergeFilteredNgrams(data){
+    return mergeQuotations(filterNgrams(data), qTokensD, repeatedLookupD);
+}
+
+/* Show the top 300 quotations in the table.
+   quotations: [{key, count, appearances (optional)}, ...]
+   caption: html of the caption (use ${n} for the number of quotations)
+   verseHtml: function that returns the html of the verse(s) of a quotation */
+function renderQuotationTable(quotations, caption, verseHtml){
+    // keep only the top 300 quotations
+    // and convert the keys into the text of the quotation, the verse(s) and the frequency:
+    const top = quotations.slice(0,300).map(q => {
+        const ngram = parseQuotationKey(q.key, qTokenIndexD);
+        return [quranTextFromIndices(ngram.start, ngram.end), verseHtml(q), q.count];
+    });
     let table = '<table dir="rtl"><tr><th>Quoted Quran text</th><th>Verse</th><th>frequency</th></tr>';
     top.forEach(arr => {
         table += "<tr>";
@@ -364,7 +390,41 @@ function buildTable(data){
         table += "</tr>";
     });
     table += "</table>";
-    d3.select("#table").html(`<div>${caption}${table}</div>`);
+    d3.select("#table").html(`<div><p>${caption.replace("${n}", quotations.length)}</p>${table}</div>`);
+}
+
+function buildTable(data){
+    console.log("Filtering data for the quotation-level table")
+    const merged = mergeFilteredNgrams(data);
+    renderQuotationTable(merged,
+        "Displaying the 300 most frequent quotations (out of ${n} that agree with the filters; the same quotation in different verses is counted as one):",
+        q => getAllSuras(q.key));
+}
+
+/* Show the table of the quotations that occur in a sura or a verse (after a click in the sura-level or verse-level graph)
+   type: "sura" or "verse"
+   id: the number of the sura ("2") or the verse ("2.255") */
+function showQuotationsOf(type, id){
+    const thisSelection = ++selectionCounter;
+    const range = (type === "sura") ? quranRanges.suras[id] : quranRanges.verses[id];
+    const name = (type === "sura") ? `sura ${id}` : `verse ${id}`;
+    d3.select("#table").html(`<div><p>Loading the quotations of ${name}...</p></div>`);
+    Promise.all([ngramsPromise || loadNgrams(), repeatedNgramsReady]).then(([data]) => {
+        if (thisSelection !== selectionCounter) {
+            return;   // the user has clicked on something else in the meantime
+        }
+        const merged = mergeFilteredNgrams(data);
+        const inPart = filterQuotationsByRange(merged, repeatedNgramsD, qTokenIndexD, range[0], range[1]);
+        renderQuotationTable(inPart,
+            `Quotations of ${name}: displaying the 300 most frequent quotations (out of \${n} that agree with the filters; ` +
+            `frequency: the number of times the quotation is cited in the corpus, wherever it occurs in the Qurʾān):`,
+            q => getVersesInPart(q.appearances));
+    }).catch(error => {
+        console.error(error);
+        if (thisSelection === selectionCounter) {
+            d3.select("#table").html(`<div><p>The quotations of ${name} could not be loaded.</p></div>`);
+        }
+    });
 }
 
 /*Display a table displaying the top X ngrams*/
@@ -374,32 +434,35 @@ function buildTableViz(){
     Promise.resolve(repeatedNgramsReady).then(() => loadNgramsAndBuildTable());
 }
 
-function loadNgramsAndBuildTable(){
-    if (typeof ngrams === 'undefined') {
+/* Load (once) the quotations of the whole Qurʾān (@ngrams_count) */
+function loadNgrams(){
+    if (!ngramsPromise) {
         const fp =  `${dataFolder}/@ngrams_count_${release}.csv`;
-            d3.csv(fp).then(data => {
-                data.forEach(d => {
-                    d.start_token = +d.start_token;
-                    d.end_token = +d.end_token;
-                    d.count = +d.count;
-                    d.year = +d.year;
-                    d.century = Math.ceil(d.year/100);
-                    d.len = d.end_token - d.start_token;
-                })
-                ngrams = data;
-                buildTable(data);
+        ngramsPromise = d3.csv(fp).then(data => {
+            data.forEach(d => {
+                d.start_token = +d.start_token;
+                d.end_token = +d.end_token;
+                d.count = +d.count;
+                d.year = +d.year;
+                d.century = Math.ceil(d.year/100);
+                d.len = d.end_token - d.start_token;
+            })
+            ngrams = data;
+            return data;
         });
-    } else {
-        buildTable(ngrams);
+        ngramsPromise.catch(() => { ngramsPromise = undefined; });   // (so that it can be tried again)
     }
-    
+    return ngramsPromise;
+}
+
+function loadNgramsAndBuildTable(){
+    loadNgrams().then(buildTable);
 }
 
 /* The number of words that a row of a verse file (data/<sura>.<aya>.csv) covers is
-   ngram_length + NGRAM_LENGTH_OFFSET. In the current data, ngram_length is the number of words minus one
-   (a quotation of one word has ngram_length 0). If the files are generated again with ngram_length
-   as the number of words, change this to 0. */
-const NGRAM_LENGTH_OFFSET = 1;
+   ngram_length + NGRAM_LENGTH_OFFSET. ngram_length is the number of words (data generated in 2026 or later; in older data
+   it was the number of words minus one, which corresponds to an offset of 1). */
+const NGRAM_LENGTH_OFFSET = 0;
 
 var ayaDataCache = new Map();   // "sura.aya": promise of the rows of the file of that verse
 var currentAyaKey = null;       // the verse that is shown below the plot
@@ -449,12 +512,79 @@ function showAyaHeatMap(suraAya) {
         if (currentAyaKey !== suraAya) {
             return;   // the mouse has moved to another verse in the meantime
         }
-        d3.select("#ayaTextDiv").html(formatAyaHeatMap(suraAya, filterArray(rows)));
+        const filteredRows = filterArray(rows);
+        d3.select("#ayaTextDiv").html(formatAyaHeatMap(suraAya, filteredRows));
+        // a click on a word shows the quotations that contain the word:
+        d3.selectAll("#ayaTextDiv span[data-word]").on("click", function() {
+            const word = +this.dataset.word;
+            d3.selectAll("#ayaTextDiv span[data-word]").style("outline", null);
+            d3.select(this).style("outline", "2px solid black");
+            showQuotationsOfWord(suraAya, filteredRows, word);
+        });
     }).catch(error => {
         console.error(error);
         if (currentAyaKey === suraAya) {
             d3.select("#heatmapStatus").text("The heat map is not available (click in the graph, and then on the dot to try again).");
         }
+    });
+}
+
+/* The names of the texts (version URIs of the OpenITI corpus) by the text_id of the verse files */
+var textIdsPromise;
+function loadTextIds() {
+    if (!textIdsPromise) {
+        textIdsPromise = d3.json("resources/_text_ids.json");
+        textIdsPromise.catch(() => { textIdsPromise = undefined; });   // (so that it can be tried again)
+    }
+    return textIdsPromise;
+}
+
+/* The words of a verse that a quotation (see quotationsAtWord) covers, with "..." where it continues in another verse */
+function quotationTextInVerse(suraAya, q) {
+    const words = ayaTextD[suraAya].split(" ");
+    const first = Math.max(q.start, 1);
+    const last = Math.min(q.start + q.length - 1, words.length);
+    return (q.start < 1 ? "... " : "") + words.slice(first - 1, last).join(" ") + (q.start + q.length - 1 > words.length ? " ..." : "");
+}
+
+/* Show the quotations of a verse that contain a word (after a click on the word in the heat map),
+   with their frequency (the number of times that the quotation is cited in the corpus).
+   A click on a quotation shows the texts in which it is cited. */
+function showQuotationsOfWord(suraAya, rows, word) {
+    const quotations = quotationsAtWord(rows, word, NGRAM_LENGTH_OFFSET);
+    const words = ayaTextD[suraAya].split(" ");
+    let html = `<p>Quotations of verse ${suraAya} that contain the word <span dir="rtl">${words[word - 1]}</span> ` +
+               `(${quotations.length} quotations; click on a quotation to see the texts in which it is cited):</p>`;
+    html += '<table dir="rtl"><tr><th>Quoted Quran text</th><th>times cited</th><th>texts</th></tr>';
+    quotations.forEach((q, i) => {
+        html += `<tr class="quotationRow" data-i="${i}" style="cursor: pointer">` +
+                `<td>${quotationTextInVerse(suraAya, q)}</td><td>${q.count}</td><td>${q.nTexts}</td></tr>`;
+    });
+    html += '</table><div id="quotationTexts" dir="ltr"></div>';
+    d3.select("#wordDetails").html(html);
+    d3.selectAll("#wordDetails tr.quotationRow").on("click", function() {
+        d3.selectAll("#wordDetails tr.quotationRow").style("background-color", null);
+        d3.select(this).style("background-color", "#e5e5e5");
+        showTextsOfQuotation(suraAya, rows, quotations[+this.dataset.i]);
+    });
+}
+
+/* Show the texts in which a quotation of a verse is cited (earliest first) */
+function showTextsOfQuotation(suraAya, rows, q) {
+    const texts = textsOfQuotation(rows, q.start, q.length, NGRAM_LENGTH_OFFSET);
+    const div = d3.select("#quotationTexts");
+    div.html("<p>Loading...</p>");
+    loadTextIds().then(textIds => {
+        let html = `<p>${quotationTextInVerse(suraAya, q)}: cited ${q.count} times in ${texts.length} texts:</p>`;
+        html += '<table dir="ltr"><tr><th>year (AH)</th><th>text</th><th>times cited</th></tr>';
+        texts.forEach(t => {
+            html += `<tr><td>${t.year}</td><td>${textIds[t.textId] || ("text " + t.textId)}</td><td>${t.count}</td></tr>`;
+        });
+        html += "</table>";
+        div.html(html);
+    }).catch(error => {
+        console.error(error);
+        div.html("<p>The names of the texts could not be loaded.</p>");
     });
 }
 
@@ -474,10 +604,12 @@ function formatAyaHeatMap(suraAya, rows) {
             .range(["lightyellow", "orange", "purple"]);
     let html = `<p>${suraAya}: `;
     ayaTokens.forEach((token, i) => {
-        html += `<span title="${counts[i]}" style="background-color: ${colorScale(counts[i])}">${token} </span>`;
+        html += `<span data-word="${i + 1}" title="${counts[i]}" style="cursor: pointer; background-color: ${colorScale(counts[i])}">${token} </span>`;
     });
     html += `</p><p dir="ltr">Colour: the number of quotations that contain the word ` +
-            `(lightest: ${min}, darkest: ${max}; hover over a word to see its number).</p>`;
+            `(lightest: ${min}, darkest: ${max}; hover over a word to see its number; ` +
+            `click on a word to see the quotations that contain it).</p>` +
+            `<div id="wordDetails" dir="ltr"></div>`;
     return html;
 }
 
@@ -543,11 +675,12 @@ d3.dsv("\t", allStatsFp).then(function(data) {
             ayaTextD[suraAya] = d.aya_text;
             let ayaTokens = d.aya_text.split(" ");
             for (let j=0; j<ayaTokens.length; j++) {
-                qTokensD[qtoken] = [ayaTokens[j], `${suraAya}.${j}`];
-                qTokenIndexD[`${suraAya}.${j}`] = qtoken;
+                qTokensD[qtoken] = [ayaTokens[j], `${suraAya}.${j + 1}`];
+                qTokenIndexD[`${suraAya}.${j + 1}`] = qtoken;
                 qtoken += 1
             }
         }
+        quranRanges = buildRanges(qTokensD);
         
 
         // create the sura scatter plot
