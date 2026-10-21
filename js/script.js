@@ -583,7 +583,7 @@ function showTextsOfQuotation(suraAya, rows, q, div) {
     const texts = textsOfQuotation(rows, q.start, q.length, NGRAM_LENGTH_OFFSET);
     div.html("<p>Loading...</p>");
     loadTextIds().then(textIds => {
-        let html = `<p>${quotationTextInVerse(suraAya, q)}: cited ${q.count} times in ${texts.length} texts:</p>`;
+        let html = `<p>Cited ${q.count} ${q.count === 1 ? "time" : "times"} in ${texts.length} ${texts.length === 1 ? "text" : "texts"}:</p>`;
         html += '<table dir="ltr"><tr><th>year (AH)</th><th>text</th><th>times cited</th></tr>';
         texts.forEach(t => {
             html += `<tr><td>${t.year}</td><td>${textIds[t.textId] || ("text " + t.textId)}</td><td>${t.count}</td></tr>`;
