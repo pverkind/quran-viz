@@ -666,36 +666,44 @@ function quranTextFromIndices(start, end){
 /* The verse(s) of a quotation, as html: the first appearance of the quotation in the Qurʾān
    and the number of other verses in which it occurs.
    key: key of the first appearance of the quotation (see quotations.js) */
-function getAllSuras(key){
-    let repeated = repeatedNgramsD[key] || [];
-    let suraAya = key.split(".").slice(0,2).join(".");
-    suraAya = `<span class="ttanchor" title="${ayaTextD[suraAya]}">${suraAya}</span>`;
-    if (repeated.length > 0){
-        let nVerses = (repeated.length == 1) ? "1 other verse" : `${repeated.length} other verses`;
-        // keep only the sura and aya number for the repeats:
-        repeated = repeated.map(s => s.split(".").slice(0,2).join("."));
-        suraAya += `<br><span class="ttanchor" dir="ltr" title="${repeated.join(', ')}">(and ${nVerses})</span>`;
-    }
+/* The verse(s) of an appearance of a quotation: "3.26", or "3.26-3.27" if the quotation goes beyond the verse
+   a: {start, end}: the token indexes of the first and the last word in the Qurʾān (see appearancesOf) */
+function verseLabel(a) {
+    const first = ayaKeys[verseOfToken[a.start]];
+    const last = ayaKeys[verseOfToken[a.end]];
+    return first === last ? first : `${first}-${last}`;
+}
 
-    return suraAya;
+/* The verses of a quotation as html (in the table of all quotations): the first appearance in the Qurʾān,
+   and the number of other verses in which it occurs (with a pop-up with the list of these verses)
+   key: key of the first appearance of the quotation (see quotations.js) */
+function getAllSuras(key){
+    const labels = [...new Set(appearancesOf(key, repeatedNgramsD, qTokenIndexD).map(verseLabel))];
+    return versesHtml(labels, "other");
+}
+
+/* The first verse (with the text of the verse as a tooltip) and a small text with a pop-up with the other verses
+   labels: the verses (see verseLabel); word: "other" or "more here" (see moreVersesHtml) */
+function versesHtml(labels, word) {
+    const first = labels[0];
+    let html = `<span class="ttanchor" title="${ayaTextD[first.split("-")[0]]}">${first}</span>`;
+    if (labels.length > 1) {
+        html += "<br>" + moreVersesHtml(labels.slice(1), word);
+    }
+    return html;
+}
+
+/* "(and 3 other verses)": a small text with a pop-up with the list of the verses (when the mouse is over the text)
+   verses: the verses ("<sura>.<aya>"); word: "other" or "more here" */
+function moreVersesHtml(verses, word) {
+    const label = `and ${verses.length} ${word === "other" ? (verses.length === 1 ? "other verse" : "other verses") : "more here"}`;
+    return `<span class="more" dir="ltr">(${label})<span class="popup">${verses.join(", ")}</span></span>`;
 }
 
 /* The verses of the appearances of a quotation that are in a part of the Qurʾān (a sura or a verse), as html.
    appearances: see filterQuotationsByRange */
 function getVersesInPart(appearances){
-    const verses = [];
-    appearances.forEach(a => {
-        const v = a.location.split(".").slice(0,2).join(".");
-        if (!verses.includes(v)) {
-            verses.push(v);
-        }
-    });
-    let html = `<span class="ttanchor" title="${ayaTextD[verses[0]]}">${verses[0]}</span>`;
-    if (verses.length > 1) {
-        const others = verses.slice(1);
-        html += `<br><span class="ttanchor" dir="ltr" title="${others.join(', ')}">(and ${others.length} more here)</span>`;
-    }
-    return html;
+    return versesHtml([...new Set(appearances.map(verseLabel))], "more here");
 }
 
 /* Merge the rows of the same quotation at different locations in the Quran
@@ -708,15 +716,31 @@ function mergeFilteredNgrams(data){
 /* Show the top 300 quotations in the table.
    quotations: [{key, count, appearances (optional)}, ...]
    caption: html of the caption (use ${n} for the number of quotations)
-   verseHtml: function that returns the html of the verse(s) of a quotation */
-function renderQuotationTable(quotations, caption, verseHtml){
+   verseHtml: function that returns the html of the verse(s) of a quotation
+   textHtml (optional): function that returns the html of the text of a quotation (default: the words) */
+/* The text of a quotation of a sura or verse as html: the words that are not in the sura or verse are grey
+   q: {key, appearances} (see filterQuotationsByRange); range: [first, last]: the first and last token index of the sura or verse */
+function quotationHtmlInRange(q, range) {
+    const ngram = parseQuotationKey(q.key, qTokenIndexD);
+    const where = q.appearances[0];   // (the place of the quotation in the sura or verse: the words of the quotation are the same in each place)
+    let html = "";
+    for (let i = 0; i <= ngram.end - ngram.start; i++) {
+        const word = qTokensD[ngram.start + i][0];
+        const position = where.start + i;
+        html += (position < range[0] || position > range[1]) ? `<span style="color: #999">${word}</span> ` : `${word} `;
+    }
+    return html.trimEnd();
+}
+
+function renderQuotationTable(quotations, caption, verseHtml, textHtml){
     // keep only the top 300 quotations
     // and convert the keys into the text of the quotation, the verse(s) and the frequency:
     const top = quotations.slice(0,300).map(q => {
         const ngram = parseQuotationKey(q.key, qTokenIndexD);
-        return [quranTextFromIndices(ngram.start, ngram.end), verseHtml(q), q.count];
+        return [verseHtml(q), textHtml ? textHtml(q) : quranTextFromIndices(ngram.start, ngram.end), q.count];
     });
-    let table = '<table dir="rtl"><tr><th>Quoted Quran text</th><th>Verse</th><th>frequency</th></tr>';
+    // (the table is right to left: from the right, the columns are the verse, the quotation and the frequency)
+    let table = '<table dir="rtl"><tr><th>Verse</th><th>Quoted Quran text</th><th>frequency</th></tr>';
     top.forEach(arr => {
         table += "<tr>";
         arr.forEach(el => table += `<td>${el}</td>`);
@@ -751,8 +775,10 @@ function showQuotationsOf(type, id){
         const inPart = filterQuotationsByRange(merged, repeatedNgramsD, qTokenIndexD, range[0], range[1]);
         renderQuotationTable(inPart,
             `Quotations of ${name}: displaying the 300 most frequent quotations (out of \${n} that agree with the filters; ` +
-            `frequency: the number of times the quotation is cited in the corpus, wherever it occurs in the Qurʾān):`,
-            q => getVersesInPart(q.appearances));
+            `frequency: the number of times the quotation is cited in the corpus, wherever it occurs in the Qurʾān; ` +
+            `words in grey are outside the ${type}):`,
+            q => getVersesInPart(q.appearances),
+            q => quotationHtmlInRange(q, range));
     }).catch(error => {
         console.error(error);
         if (thisSelection === selectionCounter) {
@@ -916,13 +942,15 @@ function loadTextIds() {
     return textIdsPromise;
 }
 
-/* The whole quotation (see quotationsAtWord) as html: the words that are not in the verse are grey */
-function quotationHtml(suraAya, q) {
+/* The whole quotation (see quotationsAtWord) as html: the words that are not in the verse are grey,
+   the word that the user has selected (its token index in the Qurʾān) is bold */
+function quotationHtml(suraAya, q, selectedToken) {
     const [first, last] = quranRanges.verses[suraAya];
     let html = "";
     for (let i = q.qstart; i <= q.qend; i++) {
         const word = qTokensD[i][0];
-        html += (i < first || i > last) ? `<span style="color: #999">${word}</span> ` : `${word} `;
+        const text = (i === selectedToken) ? `<b>${word}</b>` : word;
+        html += (i < first || i > last) ? `<span style="color: #999">${text}</span> ` : `${text} `;
     }
     return html.trimEnd();
 }
@@ -939,7 +967,7 @@ function showQuotationsOfWord(suraAya, rows, word) {
     html += '<table dir="rtl"><tr><th>Quoted Quran text</th><th>times cited</th><th>texts</th></tr>';
     quotations.forEach((q, i) => {
         html += `<tr class="quotationRow" data-i="${i}" style="cursor: pointer">` +
-                `<td>${quotationHtml(suraAya, q)}</td><td>${q.count}</td><td>${q.nTexts}</td></tr>`;
+                `<td>${quotationHtml(suraAya, q, quranRanges.verses[suraAya][0] + word - 1)}</td><td>${q.count}</td><td>${q.nTexts}</td></tr>`;
     });
     html += '</table>';
     d3.select("#wordDetails").html(html);
