@@ -33,11 +33,12 @@ const allStatsFp = `${dataFolder}/@quran_data_stats_all_${release}.tsv`;
 
 // buttons:
 const resetBtn = document.getElementById("resetFiltersBtn");
-d3.select("#intro").text(`Explore verbatim citations of the Quran in the OpenITI corpus (release ${release.replaceAll("_", ".")}).`);
+d3.select("#intro").text(`Explore verbatim citations of the Quran in the OpenITI corpus (release ${release.replaceAll("_", ".S")}).`);
 resetBtn.addEventListener("click", resetFilters);
 d3.selectAll('input[name="plotType"]').on("change", () => updateVisuals());
 d3.select("#compareCentury").on("change", () => updateVisuals());
 d3.selectAll('input[name="locations"]').on("change", () => updateData());
+d3.selectAll('input[name="frequent"]').on("change", frequentModeChanged);
 d3.select("#searchInput").on("change", applySearch);
 d3.selectAll('input[name="numbers"]').on("change", () => updateVisuals());
 const suraVizBtn = document.getElementById("suraVizBtn");
@@ -132,14 +133,14 @@ function filterArray(data, ignore = {}) {
 
 /* The key of the data of the graphs (see computeQdata) */
 function dataKey(allLocations) {
-    return `${allLocations}|${search ? search.term : ""}`;
+    return `${allLocations}|${search ? search.term : ""}|${excluded.size ? excludedVersion : ""}`;
 }
 
 /* The data of the graphs: the quotations at their first location in the Qurʾān (the stats file),
    or (if "all locations" is checked and/or there is a search term, and the data is ready) the data of computeQdata */
 function currentQdata() {
     const allLocations = document.getElementById("allLocationsBtn").checked;
-    if (!allLocations && !search) {
+    if (!allLocations && !search && excluded.size === 0) {
         return qdata;
     }
     return qdataCache.get(dataKey(allLocations)) || qdata;
@@ -152,11 +153,15 @@ function currentQdata() {
 function computeQdata(allLocations) {
     const key = dataKey(allLocations);
     const current = search;
+    const excludedNow = excluded;
     return Promise.all([loadNgrams(), repeatedNgramsReady]).then(([rows]) => {
         if (qdataCache.has(key)) {
             return;
         }
-        const used = current ? rows.filter(d => current.contains(d.start_token, d.end_token)) : rows;
+        let used = current ? rows.filter(d => current.contains(d.start_token, d.end_token)) : rows;
+        if (excludedNow.size) {
+            used = used.filter(d => !isExcludedQuotation(excludedNow, qTokensD, repeatedLookupD, d.start_token, d.end_token));
+        }
         const counts = countByVerse(used, qTokensD, qTokenIndexD, repeatedNgramsD, verseOfToken, allLocations, current);
         qdataCache.set(key, Array.from(counts, ([id, count]) => {
             const year = Math.floor(id / 10000);
@@ -175,11 +180,11 @@ function updateData() {
     const allLocations = document.getElementById("allLocationsBtn").checked;
     const status = d3.select("#locationsStatus");
     const key = dataKey(allLocations);
-    if ((!allLocations && !search) || qdataCache.has(key)) {
+    if ((!allLocations && !search && excluded.size === 0) || qdataCache.has(key)) {
         status.text("");
         updateVisuals();
     } else {
-        status.text(search ? "Searching..." : "Counting at all locations...");
+        status.text(search ? "Searching..." : (excluded.size && !allLocations ? "Counting..." : "Counting at all locations..."));
         computeQdata(allLocations)
             .then(() => {
                 if (key === dataKey(document.getElementById("allLocationsBtn").checked)) {   // (the user has not changed the settings again)
@@ -189,6 +194,74 @@ function updateData() {
             })
             .catch(error => { console.error(error); status.text("The counts could not be loaded."); });
     }
+}
+
+/* The most frequently cited quotations (merged: the same quotation in different places is one quotation):
+   [{key, count}, ...], the most frequent first. Returns a promise. */
+function loadFrequentList() {
+    return Promise.all([loadNgrams(), repeatedNgramsReady]).then(([rows]) => {
+        if (!frequentList) {
+            frequentList = mergeQuotations(rows, qTokensD, repeatedLookupD).slice(0, N_FREQUENT);
+            frequentChoice = new Set(frequentList.map(q => q.key));   // (all of them are excluded to begin with)
+        }
+        return frequentList;
+    });
+}
+
+/* The user has changed the frequent quotations that are excluded: draw everything again */
+function frequentChanged() {
+    const exclude = document.getElementById("excludeFrequentBtn").checked;
+    excluded = exclude ? new Set(frequentChoice) : new Set();
+    excludedVersion++;
+    d3.select("#frequentStatus").text(exclude ? `${excluded.size} excluded` : "");
+    updateData();
+}
+
+/* The list of the frequent quotations with a checkbox for each of them (a checked quotation is excluded) */
+function drawFrequentPanel() {
+    const panel = d3.select("#frequentPanel");
+    panel.html("");
+    panel.append("p").attr("class", "frequent-intro")
+        .text(`The ${frequentList.length} most frequently cited quotations. A checked quotation is excluded from the graphs and tables:`);
+    const buttons = panel.append("p");
+    const setAll = value => {
+        frequentChoice = value ? new Set(frequentList.map(q => q.key)) : new Set();
+        panel.selectAll("input.frequent-check").property("checked", value);
+        frequentChanged();
+    };
+    buttons.append("button").attr("type", "button").text("check all").on("click", () => setAll(true));
+    buttons.append("button").attr("type", "button").text("uncheck all").on("click", () => setAll(false));
+    const table = panel.append("div").attr("class", "frequent-list").append("table").attr("dir", "rtl");
+    frequentList.forEach(q => {
+        const ngram = parseQuotationKey(q.key, qTokenIndexD);
+        const text = quranTextFromIndices(ngram.start, ngram.end);
+        const row = table.append("tr");
+        row.append("td").append("input").attr("type", "checkbox").attr("class", "frequent-check")
+            .property("checked", frequentChoice.has(q.key))
+            .on("change", function() {
+                if (this.checked) { frequentChoice.add(q.key); } else { frequentChoice.delete(q.key); }
+                frequentChanged();
+            });
+        row.append("td").attr("title", text).text(text.length > 90 ? text.slice(0, 90) + "..." : text);
+        row.append("td").attr("dir", "ltr").text(q.count);
+    });
+}
+
+/* The user has chosen to include or exclude the frequent quotations */
+function frequentModeChanged() {
+    const exclude = document.getElementById("excludeFrequentBtn").checked;
+    const panel = d3.select("#frequentPanel");
+    if (!exclude) {
+        panel.style("display", "none");
+        frequentChanged();
+        return;
+    }
+    d3.select("#frequentStatus").text("Loading...");
+    loadFrequentList().then(() => {
+        drawFrequentPanel();
+        panel.style("display", null);
+        frequentChanged();
+    }).catch(error => { console.error(error); d3.select("#frequentStatus").text("The list could not be loaded."); });
 }
 
 /* The user has typed a search term: search it in the text of the Qurʾān */
@@ -274,7 +347,8 @@ function filterVerseRows(rows, suraAya) {
     const lenMax = +d3.select("#lenInputMax").property("value");
     // (the length is the length of the whole quotation, not only of its part in this verse)
     return filterArray(rows, {sura: true, aya: true}).filter(d => d.total >= lenMin && d.total <= lenMax &&
-        (!search || termInVerse(d, suraAya)));
+        (!search || termInVerse(d, suraAya)) &&
+        !isExcludedQuotation(excluded, qTokensD, repeatedLookupD, d.qstart, d.qend));
 }
 
 
@@ -826,7 +900,8 @@ function getVersesInPart(appearances){
    (e.g. the basmala at the start of sura 1 and at the start of sura 2), and sum up the counts:
    [{key: key of the first appearance of the quotation, count: count}, ...] sorted by the number of citations */
 function mergeFilteredNgrams(data){
-    return mergeQuotations(filterNgrams(data), qTokensD, repeatedLookupD);
+    const merged = mergeQuotations(filterNgrams(data), qTokensD, repeatedLookupD);
+    return excluded.size ? merged.filter(q => !excluded.has(q.key)) : merged;   // (without the excluded quotations)
 }
 
 /* Show the top 300 quotations in the table.
@@ -945,6 +1020,11 @@ var ayaDataCache = new Map();   // "sura.aya": promise of the rows of the file o
 var currentAyaKey = null;       // the verse that is shown below the plot
 var verseOfToken = [];            // token index in the Qurʾān: index of its verse (in ayaKeys)
 var qdataCache = new Map();       // like qdata, but for other settings: all locations and/or the search (see computeQdata)
+var frequentList = null;          // the most frequent quotations: [{key, count}, ...] (see loadFrequentList)
+var frequentChoice = new Set();   // the keys of the frequent quotations that the user has checked (to exclude)
+var excluded = new Set();         // the keys of the quotations that are excluded now (frequentChoice, if "exclude" is checked)
+var excludedVersion = 0;          // changes when the excluded quotations change (for the cache of the data)
+const N_FREQUENT = 100;           // the number of frequent quotations in the list
 var normTokens = [];              // token index in the Qurʾān: the normalised word (for the search)
 var search = null;                // the search (see applySearch and buildSearch): null if there is no search term
 var ayaWords = new Object();      // sura.aya: number of words of the verse

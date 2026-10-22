@@ -11,7 +11,7 @@ const path = require("node:path");
 const {quotationKey, buildRepeatedLookup, canonicalKey, parseQuotationKey, mergeQuotations, tokenCounts,
     buildRanges, appearancesOf, filterQuotationsByRange,
     textKey, segmentOf, continuationSegments, resolveWholeQuotations,
-    quotationsAtWord, textsOfQuotation, countByVerse, normaliseArabic, buildSearch} = require("./quotations.js");
+    quotationsAtWord, textsOfQuotation, countByVerse, normaliseArabic, buildSearch, isExcludedQuotation} = require("./quotations.js");
 
 const release = "2023_1_8";
 
@@ -533,4 +533,26 @@ test("counting the quotations per verse with a search term: only in the verses t
     const end16 = qTokenIndexD["1.6.3"];
     assert.deepStrictEqual(search.occurrencesIn(end16 - 2, end16), [{first: end16, last: end16}]);
     assert.deepStrictEqual(search.occurrencesIn(end16 - 3, end16 - 1), []);
+});
+
+test("excluding frequent quotations", () => {
+    const rows = readNgrams();
+    const top = mergeQuotations(rows, qTokensD, repeatedLookupD).slice(0, 100);
+    assert.strictEqual(top.length, 100);
+    assert.strictEqual(top[0].key, "1.1.4.4");           // the basmala is the most frequent quotation
+    for (let i = 1; i < top.length; i++) assert.ok(top[i - 1].count >= top[i].count);
+    const excluded = new Set(top.map(q => q.key));
+    // the basmala at its first location and at another location (2:1) is excluded:
+    assert.ok(isExcludedQuotation(excluded, qTokensD, repeatedLookupD, 0, 3));
+    assert.ok(isExcludedQuotation(excluded, qTokensD, repeatedLookupD, qTokenIndexD["2.1.1"], qTokenIndexD["2.1.4"]));
+    // a longer quotation that contains the basmala, and a shorter part of it, are other quotations:
+    assert.ok(!isExcludedQuotation(excluded, qTokensD, repeatedLookupD, 0, 4));
+    assert.ok(!isExcludedQuotation(excluded, qTokensD, repeatedLookupD, 1, 3));
+    // nothing is excluded without excluded quotations:
+    assert.ok(!isExcludedQuotation(new Set(), qTokensD, repeatedLookupD, 0, 3));
+    // the rows that are left: fewer citations than before
+    const kept = rows.filter(d => !isExcludedQuotation(excluded, qTokensD, repeatedLookupD, d.start_token, d.end_token));
+    const total = rows.reduce((sum, d) => sum + d.count, 0);
+    const keptTotal = kept.reduce((sum, d) => sum + d.count, 0);
+    assert.ok(keptTotal < total && keptTotal > total * 0.5);
 });

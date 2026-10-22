@@ -418,9 +418,19 @@ function buildSearch(term, tokens) {
     return {term, occurrences, contains, occurrencesIn};
 }
 
+/* Whether a quotation is one of the excluded (frequent) quotations
+   excluded: a Set of keys of the first appearance of quotations (see mergeQuotations)
+   start, end: the token indexes of the first and the last word of the quotation in the Qurʾān */
+function isExcludedQuotation(excluded, qTokensD, repeatedLookupD, start, end) {
+    if (excluded.size === 0 || !(end in qTokensD) || !(start in qTokensD)) {
+        return false;
+    }
+    return excluded.has(canonicalKey(quotationKey(qTokensD, start, end), repeatedLookupD));
+}
+
 if (typeof module !== "undefined" && module.exports) {
     module.exports = {quotationKey, buildRepeatedLookup, canonicalKey, parseQuotationKey, mergeQuotations, tokenCounts,
                       buildRanges, appearancesOf, filterQuotationsByRange,
                       textKey, segmentOf, continuationSegments, resolveWholeQuotations,
-                      quotationsAtWord, textsOfQuotation, countByVerse, normaliseArabic, buildSearch};
+                      quotationsAtWord, textsOfQuotation, countByVerse, normaliseArabic, buildSearch, isExcludedQuotation};
 }

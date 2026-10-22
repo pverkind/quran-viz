@@ -62,6 +62,12 @@
         .radio-toolbar label + input + label { border-left: none; }
         .radio-toolbar label:hover { background: var(--accent-light); }
         .radio-toolbar input:disabled + label { opacity: 0.5; cursor: not-allowed; background: #f3f3f3; }
+        .frequent-panel { margin-top: 14px; border: 1px solid var(--border); border-radius: 6px; padding: 8px 12px; background: #fafbfc; }
+        .frequent-panel p { margin: 4px 0; font-size: 14px; }
+        .frequent-panel button { margin-right: 8px; padding: 3px 12px; border: 1px solid var(--accent); border-radius: 4px; background: white; color: var(--accent); cursor: pointer; }
+        .frequent-list { max-height: 260px; overflow-y: auto; font-size: 18px; }
+        .frequent-list td { padding: 3px 10px; }
+        .frequent-list input { transform: scale(1.2); }
         .toolbar-label { align-self: center; margin-right: 8px; font-size: 14px; color: #555; }
         .radio-toolbar input[type="radio"]:checked + label, .radio-toolbar input[type="checkbox"]:checked + label {
             background: var(--accent);
@@ -249,6 +255,16 @@
             <span id="locationsStatus" class="toolbar-label"></span>
         </div>
 
+        <div class="radio-toolbar" id="frequentToggle" title="Exclude the most frequently cited quotations (for example the basmala) from the graphs and tables: a list of them is shown, in which you can choose which ones to exclude">
+            <span class="toolbar-label">Frequent quotations:</span>
+            <input type="radio" id="includeFrequentBtn" name="frequent" value="include" checked>
+            <label for="includeFrequentBtn">include</label>
+
+            <input type="radio" id="excludeFrequentBtn" name="frequent" value="exclude">
+            <label for="excludeFrequentBtn">exclude</label>
+            <span id="frequentStatus" class="toolbar-label"></span>
+        </div>
+
         <div class="radio-toolbar" id="compareToggle" title="Divide the graphs: the heat map gets a row for each century, the bars are stacked by century">
             <span class="toolbar-label">Compare by:</span>
             <input type="checkbox" id="compareCentury">
@@ -258,6 +274,7 @@
             <label for="compareGenre" title="Not implemented yet">genre</label>
         </div>
     </div>
+    <div id="frequentPanel" class="frequent-panel" style="display: none"></div>
 </div>
 
 <div id="ayaTextDiv" class="card" dir="rtl"></div>
