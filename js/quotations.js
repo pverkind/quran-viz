@@ -310,14 +310,26 @@ function textsOfQuotation(rows, qstart, qend) {
    rows: [{start_token, end_token, year, count}, ...] (the rows of @ngrams_count: token indexes in the Qurʾān)
    repeatedNgramsD: key of the first appearance of a quotation: keys of its other appearances
    verseOfToken: the index of the verse of each token index in the Qurʾān (the first verse is 0)
+   search (optional, see buildSearch): only the quotations that contain the search term are counted, and only
+       in the verses in which the term occurs (not in the other verses of a quotation of several verses)
    Returns: a Map: year * 10000 + the index of the verse -> the number of quotations */
-function countByVerse(rows, qTokensD, qTokenIndexD, repeatedNgramsD, verseOfToken, allLocations) {
+function countByVerse(rows, qTokensD, qTokenIndexD, repeatedNgramsD, verseOfToken, allLocations, search) {
     const counts = new Map();
+    const addVerse = (year, v, count) => {
+        const id = year * 10000 + v;
+        counts.set(id, (counts.get(id) || 0) + count);
+    };
     const add = (year, first, last, count) => {
-        for (let v = verseOfToken[first]; v <= verseOfToken[last]; v++) {
-            const id = year * 10000 + v;
-            counts.set(id, (counts.get(id) || 0) + count);
+        if (!search) {
+            for (let v = verseOfToken[first]; v <= verseOfToken[last]; v++) addVerse(year, v, count);
+            return;
         }
+        // with a search term: only the verses in which the term occurs (once for each quotation):
+        const verses = new Set();
+        for (const o of search.occurrencesIn(first, last)) {
+            for (let v = verseOfToken[o.first]; v <= verseOfToken[o.last]; v++) verses.add(v);
+        }
+        verses.forEach(v => addVerse(year, v, count));
     };
     for (const d of rows) {
         if (!(d.end_token in qTokensD) || !(d.start_token in qTokensD)) continue;
@@ -336,9 +348,79 @@ function countByVerse(rows, qTokensD, qTokenIndexD, repeatedNgramsD, verseOfToke
     return counts;
 }
 
+/* Normalise Arabic text for searching: without the vowels and other marks (and the Qurʾānic signs), the tatweel and
+   the differences between the forms of the alif, the ya and the hamza */
+function normaliseArabic(text) {
+    return text
+        .replace(/[ـً-ٰٟۖ-ۭ]/g, "")
+        .replace(/[آأإٱ]/g, "ا")      // alif with madda, hamza, wasla -> alif
+        .replace(/ى/g, "ي")                          // alif maqsura -> ya
+        .replace(/ؤ/g, "و")                          // hamza on waw -> waw
+        .replace(/ئ/g, "ي")                          // hamza on ya -> ya
+        .replace(/ة/g, "ه");                         // ta marbuta -> ha
+}
+
+/* Search a term in the text of the Qurʾān.
+   term: the normalised search term (see normaliseArabic; a part of a word is found too)
+   tokens: the normalised words of the Qurʾān (the index is the token index)
+   Returns {occurrences: [{first, last}, ...] (the token indexes of the first and the last word of each occurrence),
+            contains(start, end): whether the term occurs in the words start to end (token indexes) of the Qurʾān,
+            occurrencesIn(start, end): the occurrences in the words start to end} */
+function buildSearch(term, tokens) {
+    const offsets = [];
+    let text = "";
+    tokens.forEach((token, i) => {
+        offsets.push(text.length);
+        text += token + " ";
+    });
+    const tokenAt = position => {          // the token at a character position (binary search)
+        let lo = 0, hi = offsets.length - 1;
+        while (lo < hi) {
+            const mid = (lo + hi + 1) >> 1;
+            if (offsets[mid] <= position) lo = mid; else hi = mid - 1;
+        }
+        return lo;
+    };
+    const occurrences = [];
+    if (term) {
+        for (let i = text.indexOf(term); i !== -1; i = text.indexOf(term, i + 1)) {
+            const first = tokenAt(i);
+            const last = tokenAt(i + term.length - 1);
+            if (occurrences.length === 0 || occurrences[occurrences.length - 1].first !== first || occurrences[occurrences.length - 1].last !== last) {
+                occurrences.push({first, last});
+            }
+        }
+    }
+    // (the occurrences have the same number of words: the first one that starts at or after the start of a
+    // quotation is also the first one that ends at or after the start)
+    const contains = (start, end) => {
+        if (!term) return true;
+        let lo = 0, hi = occurrences.length;
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (occurrences[mid].first >= start) hi = mid; else lo = mid + 1;
+        }
+        return lo < occurrences.length && occurrences[lo].last <= end;
+    };
+    // the occurrences of the term in the words start to end:
+    const occurrencesIn = (start, end) => {
+        let lo = 0, hi = occurrences.length;
+        while (lo < hi) {
+            const mid = (lo + hi) >> 1;
+            if (occurrences[mid].first >= start) hi = mid; else lo = mid + 1;
+        }
+        const found = [];
+        for (let i = lo; i < occurrences.length && occurrences[i].first <= end; i++) {
+            if (occurrences[i].last <= end) found.push(occurrences[i]);
+        }
+        return found;
+    };
+    return {term, occurrences, contains, occurrencesIn};
+}
+
 if (typeof module !== "undefined" && module.exports) {
     module.exports = {quotationKey, buildRepeatedLookup, canonicalKey, parseQuotationKey, mergeQuotations, tokenCounts,
                       buildRanges, appearancesOf, filterQuotationsByRange,
                       textKey, segmentOf, continuationSegments, resolveWholeQuotations,
-                      quotationsAtWord, textsOfQuotation, countByVerse};
+                      quotationsAtWord, textsOfQuotation, countByVerse, normaliseArabic, buildSearch};
 }

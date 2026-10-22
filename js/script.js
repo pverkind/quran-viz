@@ -36,7 +36,8 @@ const resetBtn = document.getElementById("resetFiltersBtn");
 resetBtn.addEventListener("click", resetFilters);
 d3.selectAll('input[name="plotType"]').on("change", () => updateVisuals());
 d3.select("#compareCentury").on("change", () => updateVisuals());
-d3.selectAll('input[name="locations"]').on("change", () => updateLocations());
+d3.selectAll('input[name="locations"]').on("change", () => updateData());
+d3.select("#searchInput").on("change", applySearch);
 d3.selectAll('input[name="numbers"]').on("change", () => updateVisuals());
 const suraVizBtn = document.getElementById("suraVizBtn");
 suraVizBtn.addEventListener("click", buildSuraLevelViz);
@@ -79,14 +80,14 @@ function resetFilters(){
     document.getElementById("ayaInputMax").value = 286;
     document.getElementById("lenInputMin").value = 1;
     document.getElementById("lenInputMax").value = 300;
-    
-    updateVisuals()
+    document.getElementById("searchInput").value = "";
+
+    applySearch()   // (draws the graphs again)
 }
 
 function removeAllGraphs(){
     d3.selectAll("#plotToggle, #compareToggle, #numbersToggle, #locationsToggle").classed("disabled", tableVizBtn.checked);   // (bar plot or heat map: not for the table)
-    d3.select("#scatter1 svg").remove();
-    d3.select("#scatter2 svg").remove();
+    d3.selectAll("#scatter1 svg, #scatter2 svg, .nodata").remove();
     d3.select("#ayaTextDiv").html("");
     currentAyaKey = null;
     heatmapVerse = null;
@@ -128,42 +129,81 @@ function filterArray(data, ignore = {}) {
     return filteredData; 
 }
 
+/* The key of the data of the graphs (see computeQdata) */
+function dataKey(allLocations) {
+    return `${allLocations}|${search ? search.term : ""}`;
+}
+
 /* The data of the graphs: the quotations at their first location in the Qurʾān (the stats file),
-   or (if "all locations" is checked and the data is ready) at all their locations */
+   or (if "all locations" is checked and/or there is a search term, and the data is ready) the data of computeQdata */
 function currentQdata() {
-    return (document.getElementById("allLocationsBtn").checked && qdataAll) ? qdataAll : qdata;
+    const allLocations = document.getElementById("allLocationsBtn").checked;
+    if (!allLocations && !search) {
+        return qdata;
+    }
+    return qdataCache.get(dataKey(allLocations)) || qdata;
 }
 
-/* Count the quotations at all their locations in the Qurʾān (not only the first one), without extra data files:
+/* Count the quotations (at all their locations in the Qurʾān or only at the first location), without extra data files:
    the quotations of @ngrams_count (their first location) and the dictionary of the repeated ngrams.
-   Returns a promise of the rows [{century, year, sura, aya, sura_aya, count}, ...] (like the stats file) */
-function loadAllLocations() {
-    if (!qdataAllPromise) {
-        qdataAllPromise = Promise.all([loadNgrams(), repeatedNgramsReady]).then(([rows]) => {
-            const counts = countByVerse(rows, qTokensD, qTokenIndexD, repeatedNgramsD, verseOfToken, true);
-            qdataAll = Array.from(counts, ([id, count]) => {
-                const year = Math.floor(id / 10000);
-                const sura_aya = ayaKeys[id % 10000];
-                const [sura, aya] = sura_aya.split(".");
-                return {century: Math.ceil(year / 100), year, sura: +sura, aya: +aya, sura_aya, count};
-            });
-            return qdataAll;
-        });
-        qdataAllPromise.catch(() => { qdataAllPromise = null; });   // (so that it can be tried again)
-    }
-    return qdataAllPromise;
+   If there is a search term, only the quotations that contain the term are counted.
+   Returns a promise; the rows [{century, year, sura, aya, sura_aya, count}, ...] (like the stats file) are in qdataCache */
+function computeQdata(allLocations) {
+    const key = dataKey(allLocations);
+    const current = search;
+    return Promise.all([loadNgrams(), repeatedNgramsReady]).then(([rows]) => {
+        if (qdataCache.has(key)) {
+            return;
+        }
+        const used = current ? rows.filter(d => current.contains(d.start_token, d.end_token)) : rows;
+        const counts = countByVerse(used, qTokensD, qTokenIndexD, repeatedNgramsD, verseOfToken, allLocations, current);
+        qdataCache.set(key, Array.from(counts, ([id, count]) => {
+            const year = Math.floor(id / 10000);
+            const sura_aya = ayaKeys[id % 10000];
+            const [sura, aya] = sura_aya.split(".");
+            return {century: Math.ceil(year / 100), year, sura: +sura, aya: +aya, sura_aya, count};
+        }));
+        while (qdataCache.size > 3) {   // (keep the data of the last settings: it is big)
+            qdataCache.delete(qdataCache.keys().next().value);
+        }
+    });
 }
 
-/* The user has chosen between the first location and all locations of the quotations */
-function updateLocations() {
+/* The user has changed the first location / all locations, or the search term: get the data and draw the graphs */
+function updateData() {
+    const allLocations = document.getElementById("allLocationsBtn").checked;
     const status = d3.select("#locationsStatus");
-    if (document.getElementById("allLocationsBtn").checked && !qdataAll) {
-        status.text("Counting at all locations...");
-        loadAllLocations().then(() => { status.text(""); updateVisuals(); })
-            .catch(error => { console.error(error); status.text("The counts could not be loaded."); });
-    } else {
+    const key = dataKey(allLocations);
+    if ((!allLocations && !search) || qdataCache.has(key)) {
+        status.text("");
         updateVisuals();
+    } else {
+        status.text(search ? "Searching..." : "Counting at all locations...");
+        computeQdata(allLocations)
+            .then(() => {
+                if (key === dataKey(document.getElementById("allLocationsBtn").checked)) {   // (the user has not changed the settings again)
+                    status.text("");
+                    updateVisuals();
+                }
+            })
+            .catch(error => { console.error(error); status.text("The counts could not be loaded."); });
     }
+}
+
+/* The user has typed a search term: search it in the text of the Qurʾān */
+function applySearch() {
+    const term = normaliseArabic(document.getElementById("searchInput").value).replace(/\s+/g, " ").trim();
+    search = term ? buildSearch(term, normTokens) : null;
+    const status = d3.select("#searchStatus");
+    if (!search) {
+        status.text("");
+    } else if (search.occurrences.length === 0) {
+        status.text("not found");
+    } else {
+        const nVerses = new Set(search.occurrences.map(o => verseOfToken[o.first])).size;
+        status.text(`${search.occurrences.length} times in ${nVerses} verses`);
+    }
+    updateData();
 }
 
 function updateVisuals() {
@@ -175,7 +215,11 @@ function updateVisuals() {
     };
     removeAllGraphs();
     if (keep.verse && !tableVizBtn.checked) {
-        d3.select("#ayaTextDiv").html(keep.html);   // (until the heat map is drawn again)
+        if (keep.heatmapVerse) {
+            d3.select("#ayaTextDiv").html(keep.html);   // (until the heat map is drawn again)
+        } else {
+            showAya(keep.verse);   // (the text of the verse, with the words of the search term)
+        }
         currentAyaKey = keep.verse;
         heatmapVerse = keep.heatmapVerse;
         selectedWord = keep.selectedWord;
@@ -214,13 +258,22 @@ function updateVisuals() {
     }
 }
 
+/* Whether the search term occurs in the part of the quotation (the row of a verse file) that is in the verse */
+function termInVerse(d, suraAya) {
+    const nWords = ayaWords[suraAya];
+    const part = segmentOf(d, nWords, NGRAM_LENGTH_OFFSET);
+    const first = quranRanges.verses[suraAya][0];
+    return search.occurrencesIn(first + part.first - 1, first + part.last - 1).length > 0;
+}
+
 /* Filter the rows of a verse file (the quotations of one verse): by century, year
    and the length of the whole quotation (in words) */
-function filterVerseRows(rows) {
+function filterVerseRows(rows, suraAya) {
     const lenMin = +d3.select("#lenInputMin").property("value");
     const lenMax = +d3.select("#lenInputMax").property("value");
     // (the length is the length of the whole quotation, not only of its part in this verse)
-    return filterArray(rows, {sura: true, aya: true}).filter(d => d.total >= lenMin && d.total <= lenMax);
+    return filterArray(rows, {sura: true, aya: true}).filter(d => d.total >= lenMin && d.total <= lenMax &&
+        (!search || termInVerse(d, suraAya)));
 }
 
 
@@ -234,6 +287,10 @@ function filterVerseRows(rows) {
    title: "Suras", "Verses" (the verses of the sura) or "All Verses"; sura: the sura of "Verses" */
 function createScatterPlot(container, data, xVar, yVar, title, sura, width) {
     const dataXVar = xVar;
+    if (data.length === 0) {
+        d3.select(container).append("p").attr("class", "nodata").text("No quotations agree with the filters.");
+        return;
+    }
     // the position of a row of the stats file in the graph: the sura, the verse or the running verse number
     const posOfRow = r => container === "#scatter2" ? r.aya : (dataXVar === "sura_aya" ? ayaTokenIndexD[r.sura_aya] : r.sura);
     // relative numbers: the number of quotations per word of the sura or verse
@@ -306,6 +363,24 @@ function createScatterPlot(container, data, xVar, yVar, title, sura, width) {
     
     const isSuraPlot = (title === "Suras");
 
+    // the first and the last position on the x axis: all suras or verses that the graph can show (also if
+    // they have no quotations, for example with a search term), within the sura and aya filters:
+    const [axisFirst, axisLast] = (() => {
+        const input = id => +d3.select(`#${id}`).property("value");
+        const inside = (first, last, min, max) => [Math.max(first, min), Math.min(last, max)];
+        let range;
+        if (container === "#scatter2") {
+            range = inside(1, ayasInSura[sura], input("ayaInputMin"), input("ayaInputMax"));
+        } else if (dataXVar === "sura_aya") {
+            const [suraMin, suraMax] = inside(1, 114, input("suraInputMin"), input("suraInputMax"));
+            range = [ayaTokenIndexD[`${suraMin}.1`], ayaTokenIndexD[`${suraMax}.${ayasInSura[suraMax]}`]];
+        } else {
+            range = inside(1, 114, input("suraInputMin"), input("suraInputMax"));
+        }
+        // (if the filters do not make sense: the positions of the data)
+        return (range[0] <= range[1]) ? range : [d3.min(formattedData, d => d[xVar]), d3.max(formattedData, d => d[xVar])];
+    })();
+
     const heat = heatMap;
     let x, y;               // the scales of the bars
     let position;           // [x, y] where the hint is shown: the top of a bar, or the top of a column of a heat map
@@ -319,7 +394,7 @@ function createScatterPlot(container, data, xVar, yVar, title, sura, width) {
     if (!heat) {
         // build the x scale:
         x = d3.scaleLinear()
-            .domain([d3.min(formattedData, d => d[xVar])-1, d3.max(formattedData, d => d[xVar])])//.nice()
+            .domain([axisFirst - 1, axisLast])//.nice()
             .range([0, width]);
 
         // make sure X axis ticks are only integers:
@@ -377,9 +452,8 @@ function createScatterPlot(container, data, xVar, yVar, title, sura, width) {
     } else {
         // a heat map: a column for each sura or verse (a column for several verses if there are more than pixels),
         // a row for each century, the colour is the number of quotations
-        const positions = formattedData.map(d => d[xVar]);
-        const pos0 = d3.min(positions);
-        const pos1 = d3.max(positions);
+        const pos0 = axisFirst;
+        const pos1 = axisLast;
         const binSize = Math.max(1, Math.ceil((pos1 - pos0 + 1) / width));
         const nBins = Math.floor((pos1 - pos0) / binSize) + 1;
         columnWidth = width / nBins;
@@ -609,7 +683,7 @@ function createScatterPlot(container, data, xVar, yVar, title, sura, width) {
 /* Show the verses of a sura (that the mouse is over, or that the user has clicked on) in the second graph.
    If it is another sura than the one that was shown, the aya filter is reset to all the verses of the sura. */
 function filterScatter2(clickedDotD) {
-    d3.select("#scatter2 svg").remove();
+    d3.selectAll("#scatter2 svg, #scatter2 .nodata").remove();   // (the graph and the message that there is no data)
     if (verseSura !== clickedDotD.sura) {
         document.getElementById("ayaInputMin").value = 1;
         document.getElementById("ayaInputMax").value = ayasInSura[clickedDotD.sura];
@@ -647,12 +721,49 @@ function filterNgrams(data) {
     const filteredData = data.filter(d =>
         d.century >= centuryMin && d.century <= centuryMax &&
         d.year >= yearMin && d.year <= yearMax &&
-        d.len >= lenMin && d.len <= lenMax
+        d.len >= lenMin && d.len <= lenMax &&
+        (!search || search.contains(d.start_token, d.end_token))
     );
 
     console.log("Number of rows after filtering: "+ filteredData.length);
     return filteredData;
 
+}
+
+/* The words of the search term in a part of the Qurʾān (token indexes start to end): a Set of token indexes
+   (null if there is no search term) */
+function searchHits(start, end) {
+    if (!search) {
+        return null;
+    }
+    const hits = new Set();
+    for (const o of search.occurrencesIn(start, end)) {
+        for (let i = o.first; i <= o.last; i++) hits.add(i);
+    }
+    return hits;
+}
+
+/* A word of a quotation as html: the words of the search term are bold and italic
+   (the word that is selected in the heat map is bold only: see quotationHtml) */
+function markedWord(word, isHit, isSelected) {
+    let text = isHit ? `<i>${word}</i>` : word;
+    return (isHit || isSelected) ? `<b>${text}</b>` : text;
+}
+
+/* The text of a quotation (token indexes start to end) as html, with the words of the search term in bold and italic */
+function quotationTextHtml(start, end) {
+    const hits = searchHits(start, end);
+    const words = [];
+    for (let i = start; i <= end; i++) {
+        words.push(markedWord(qTokensD[i][0], hits && hits.has(i), false));
+    }
+    return words.join(" ");
+}
+
+/* The text of a verse as html, with the words of the search term in bold and italic */
+function verseTextHtml(suraAya) {
+    const [first, last] = quranRanges.verses[suraAya];
+    return quotationTextHtml(first, last);
 }
 
 function quranTextFromIndices(start, end){
@@ -723,9 +834,10 @@ function mergeFilteredNgrams(data){
 function quotationHtmlInRange(q, range) {
     const ngram = parseQuotationKey(q.key, qTokenIndexD);
     const where = q.appearances[0];   // (the place of the quotation in the sura or verse: the words of the quotation are the same in each place)
+    const hits = searchHits(ngram.start, ngram.end);
     let html = "";
     for (let i = 0; i <= ngram.end - ngram.start; i++) {
-        const word = qTokensD[ngram.start + i][0];
+        const word = markedWord(qTokensD[ngram.start + i][0], hits && hits.has(ngram.start + i), false);
         const position = where.start + i;
         html += (position < range[0] || position > range[1]) ? `<span style="color: #999">${word}</span> ` : `${word} `;
     }
@@ -737,7 +849,7 @@ function renderQuotationTable(quotations, caption, verseHtml, textHtml){
     // and convert the keys into the text of the quotation, the verse(s) and the frequency:
     const top = quotations.slice(0,300).map(q => {
         const ngram = parseQuotationKey(q.key, qTokenIndexD);
-        return [verseHtml(q), textHtml ? textHtml(q) : quranTextFromIndices(ngram.start, ngram.end), q.count];
+        return [verseHtml(q), textHtml ? textHtml(q) : quotationTextHtml(ngram.start, ngram.end), q.count];
     });
     // (the table is right to left: from the right, the columns are the verse, the quotation and the frequency)
     let table = '<table dir="rtl"><tr><th>Verse</th><th>Quoted Quran text</th><th>frequency</th></tr>';
@@ -827,8 +939,9 @@ const NGRAM_LENGTH_OFFSET = 0;
 var ayaDataCache = new Map();   // "sura.aya": promise of the rows of the file of that verse
 var currentAyaKey = null;       // the verse that is shown below the plot
 var verseOfToken = [];            // token index in the Qurʾān: index of its verse (in ayaKeys)
-var qdataAll = null;              // like qdata, but a quotation is counted at all its locations in the Qurʾān (see loadAllLocations)
-var qdataAllPromise = null;
+var qdataCache = new Map();       // like qdata, but for other settings: all locations and/or the search (see computeQdata)
+var normTokens = [];              // token index in the Qurʾān: the normalised word (for the search)
+var search = null;                // the search (see applySearch and buildSearch): null if there is no search term
 var ayaWords = new Object();      // sura.aya: number of words of the verse
 var suraWords = new Object();     // sura: number of words of the sura
 var ayasInSura = new Object();  // sura: number of verses in the sura
@@ -892,7 +1005,7 @@ function showAya(suraAya) {
     heatmapVerse = null;
     selectedWord = null;
     d3.select("#ayaTextDiv").html(
-        `<p>${suraAya}: ${ayaTextD[suraAya]}</p>` +
+        `<p>${suraAya}: ${verseTextHtml(suraAya)}</p>` +
         `<p dir="ltr" id="heatmapStatus"></p>`);
 }
 
@@ -908,7 +1021,7 @@ function showAyaHeatMap(suraAya) {
         if (currentAyaKey !== suraAya) {
             return;   // the mouse has moved to another verse in the meantime
         }
-        const filteredRows = filterVerseRows(rows);
+        const filteredRows = filterVerseRows(rows, suraAya);
         d3.select("#ayaTextDiv").html(formatAyaHeatMap(suraAya, filteredRows));
         heatmapVerse = suraAya;
         // select a word: show the quotations that contain the word
@@ -943,13 +1056,14 @@ function loadTextIds() {
 }
 
 /* The whole quotation (see quotationsAtWord) as html: the words that are not in the verse are grey,
-   the word that the user has selected (its token index in the Qurʾān) is bold */
+   the word that the user has selected (its token index in the Qurʾān) is bold,
+   the words of the search term are bold and italic */
 function quotationHtml(suraAya, q, selectedToken) {
     const [first, last] = quranRanges.verses[suraAya];
+    const hits = searchHits(q.qstart, q.qend);
     let html = "";
     for (let i = q.qstart; i <= q.qend; i++) {
-        const word = qTokensD[i][0];
-        const text = (i === selectedToken) ? `<b>${word}</b>` : word;
+        const text = markedWord(qTokensD[i][0], hits && hits.has(i), i === selectedToken);
         html += (i < first || i > last) ? `<span style="color: #999">${text}</span> ` : `${text} `;
     }
     return html.trimEnd();
@@ -1003,6 +1117,9 @@ function describeActiveFilters() {
             parts.push(`${before}${min.value}-${max.value}${after}`);
         }
     }
+    if (search) {
+        parts.push(`search "${document.getElementById("searchInput").value.trim()}"`);
+    }
     return parts.join(", ");
 }
 
@@ -1030,10 +1147,12 @@ function showTextsOfQuotation(suraAya, rows, q, div) {
    (only the quotations that agree with the filters). */
 function formatAyaHeatMap(suraAya, rows) {
     const ayaTokens = ayaTextD[suraAya].split(" ");
+    const hits = searchHits(...quranRanges.verses[suraAya]);   // (the words of the search term: bold and italic)
+    const firstToken = quranRanges.verses[suraAya][0];
     const counts = tokenCounts(rows, ayaTokens.length, NGRAM_LENGTH_OFFSET);
     const [min, max] = d3.extent(counts);
     if (max === 0) {
-        return `<p>${suraAya}: ${ayaTextD[suraAya]}</p><p dir="ltr">There are no quotations of this verse that agree with the filters.</p>`;
+        return `<p>${suraAya}: ${verseTextHtml(suraAya)}</p><p dir="ltr">There are no quotations of this verse that agree with the filters.</p>`;
     }
     const colorScale = (min === max)
         ? () => "orange"
@@ -1042,7 +1161,7 @@ function formatAyaHeatMap(suraAya, rows) {
             .range(["lightyellow", "orange", "purple"]);
     let html = `<p>${suraAya}: `;
     ayaTokens.forEach((token, i) => {
-        html += `<span data-word="${i + 1}" title="${counts[i]}" style="cursor: pointer; background-color: ${colorScale(counts[i])}">${token} </span>`;
+        html += `<span data-word="${i + 1}" title="${counts[i]}" style="cursor: pointer; background-color: ${colorScale(counts[i])}">${markedWord(token, hits && hits.has(firstToken + i), false)} </span>`;
     });
     html += `</p><p dir="ltr">Colour: the number of quotations that contain the word ` +
             `(lightest: ${min}, darkest: ${max}; hover over a word to see its number; ` +
@@ -1120,6 +1239,7 @@ d3.dsv("\t", allStatsFp).then(function(data) {
                 qTokensD[qtoken] = [ayaTokens[j], `${suraAya}.${j + 1}`];
                 qTokenIndexD[`${suraAya}.${j + 1}`] = qtoken;
                 verseOfToken.push(i);
+                normTokens.push(normaliseArabic(ayaTokens[j]));
                 qtoken += 1
             }
         }
@@ -1134,7 +1254,7 @@ d3.dsv("\t", allStatsFp).then(function(data) {
             repeatedLookupD = buildRepeatedLookup(repeatedNgramsD);
         });
         // "all locations" is the default: the graphs are drawn again when the counts are ready
-        updateLocations();
+        updateData();
 
     });
 });

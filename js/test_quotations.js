@@ -11,7 +11,7 @@ const path = require("node:path");
 const {quotationKey, buildRepeatedLookup, canonicalKey, parseQuotationKey, mergeQuotations, tokenCounts,
     buildRanges, appearancesOf, filterQuotationsByRange,
     textKey, segmentOf, continuationSegments, resolveWholeQuotations,
-    quotationsAtWord, textsOfQuotation, countByVerse} = require("./quotations.js");
+    quotationsAtWord, textsOfQuotation, countByVerse, normaliseArabic, buildSearch} = require("./quotations.js");
 
 const release = "2023_1_8";
 
@@ -475,4 +475,62 @@ test("counting the quotations per verse (a small example)", () => {
     const all = countByVerse(rows, toks, index, repeated, verseOfToken, true);
     // the first quotation: also in verse b (tokens 4-5); the second one (tokens 2-3 over two verses) is not repeated:
     assert.deepStrictEqual(Array.from(all), [[100 * 10000, 4], [100 * 10000 + 1, 4], [200 * 10000, 1], [200 * 10000 + 1, 1]]);
+});
+
+test("normalising Arabic for the search", () => {
+    assert.strictEqual(normaliseArabic("ٱلْمُسْتَقِيمَ"), "المستقيم");
+    assert.strictEqual(normaliseArabic("الرَّحْمَٰنِ"), "الرحمن");
+    assert.strictEqual(normaliseArabic("أَنزَلَ إِلَيْكَ"), "انزل اليك");
+    assert.strictEqual(normaliseArabic("هُدًى"), "هدي");
+    assert.strictEqual(normaliseArabic("المستقيم"), "المستقيم");
+});
+
+test("searching in the text of the Qurʾān", () => {
+    const tokens = Object.keys(qTokensD).map(i => normaliseArabic(qTokensD[i][0]));
+    const search = buildSearch("المستقيم", tokens);
+    assert.ok(search.occurrences.length >= 3 && search.occurrences.length <= 10);   // (with the article: 5 times)
+    // 1:6 "ihdina l-sirata l-mustaqim": the last word of the verse (3 words)
+    const end16 = qTokenIndexD["1.6.3"];
+    assert.ok(search.occurrences.some(o => o.first === end16 && o.last === end16));
+    // a quotation contains the term if it contains the word:
+    assert.ok(search.contains(end16 - 2, end16));
+    assert.ok(search.contains(end16, end16));
+    assert.ok(!search.contains(end16 - 3, end16 - 1));
+    // two words: only if the quotation contains both:
+    const two = buildSearch("الصراط المستقيم", tokens);
+    assert.ok(two.occurrences.length >= 2 && two.occurrences.length <= search.occurrences.length);
+    assert.ok(two.occurrences.every(o => o.last === o.first + 1));
+    assert.ok(two.contains(end16 - 1, end16) && !two.contains(end16, end16));
+    // a part of a word is found, a term that does not occur is not:
+    assert.ok(buildSearch("ستقيم", tokens).occurrences.length > 30);   // (also مستقيم without the article, استقيموا ...)
+    assert.strictEqual(buildSearch("ضضضضض", tokens).occurrences.length, 0);
+    assert.ok(!buildSearch("ضضضضض", tokens).contains(0, 100));
+    // no term: every quotation:
+    assert.ok(buildSearch("", tokens).contains(5, 6));
+});
+
+test("counting the quotations per verse with a search term: only in the verses that contain the term", () => {
+    const verseList = Object.keys(ayaTextD);
+    const verseOfToken = [];
+    verseList.forEach((v, i) => ayaTextD[v].split(" ").forEach(() => verseOfToken.push(i)));
+    const tokens = Object.keys(qTokensD).map(i => normaliseArabic(qTokensD[i][0]));
+    const search = buildSearch("المستقيم", tokens);
+    const rows = readNgrams().filter(d => search.contains(d.start_token, d.end_token));
+    for (const allLocations of [false, true]) {
+        const counts = countByVerse(rows, qTokensD, qTokenIndexD, repeatedNgramsD, verseOfToken, allLocations, search);
+        const verses = new Set(Array.from(counts.keys(), id => verseList[id % 10000]));
+        const verseOfOccurrences = new Set(search.occurrences.map(o => verseList[verseOfToken[o.first]]));
+        // (every verse that gets a count contains the term)
+        for (const v of verses) assert.ok(verseOfOccurrences.has(v), `${v} ${allLocations}`);
+        assert.ok(verses.has("1.6"));
+        assert.ok(!verses.has("1.5") && !verses.has("1.7"));
+        // without the search term (the whole quotation) the neighbouring verses are counted too:
+        const whole = countByVerse(rows, qTokensD, qTokenIndexD, repeatedNgramsD, verseOfToken, allLocations);
+        const wholeVerses = new Set(Array.from(whole.keys(), id => verseList[id % 10000]));
+        assert.ok(wholeVerses.has("1.5") && wholeVerses.has("1.7"));
+    }
+    // the occurrences in a part of the Qurʾān:
+    const end16 = qTokenIndexD["1.6.3"];
+    assert.deepStrictEqual(search.occurrencesIn(end16 - 2, end16), [{first: end16, last: end16}]);
+    assert.deepStrictEqual(search.occurrencesIn(end16 - 3, end16 - 1), []);
 });
