@@ -25,7 +25,7 @@
         #page { max-width: 1250px; margin: 0 auto; padding-bottom: 20px; }
         header { padding: 18px 0 10px; display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
         h1 { font-size: 26px; margin: 0; }
-        .tagline { color: #777; font-size: 14px; }
+        .intro { margin: 0 0 14px; color: #555; font-size: 15px; }
 
         /* the cards: the graphs, the verse and the tables */
         .card {
@@ -153,8 +153,8 @@
 <div id="page">
 <header>
     <h1>Quran quotations explorer</h1>
-    <span class="tagline">(in the early stages of development)</span>
 </header>
+<p id="intro" class="intro"></p>
 
 <div class="toolbars">
 <div class="radio-toolbar">
@@ -184,11 +184,6 @@
 <div id="controls" class="card">
     <h2>Filters and Settings</h2>
     <div class="filter-grid">
-        <div class="filter" title="Search a word or phrase in the Qurʾān (without vowels; a part of a word is found too): the graphs and tables show only the quotations that contain it">
-            <span class="filter-label">Search:</span>
-            <input type="text" id="searchInput" dir="rtl" placeholder="e.g. المستقيم" style="width: 170px; font-size: 16px">
-            <span id="searchStatus"></span>
-        </div>
         <div class="filter">
             <span class="filter-label">Sura:</span>
             <span>from</span>
@@ -210,6 +205,11 @@
             <span class="greyed">to</span>
             <input type="text" id="lenInputMax" min="1" max="300" value="300">
         </div>
+        <div class="filter" title="Search a word or phrase in the Qurʾān (without vowels; a part of a word is found too): the graphs and tables show only the quotations that contain it">
+            <span class="filter-label">Search:</span>
+            <input type="text" id="searchInput" dir="rtl" placeholder="e.g. المستقيم" style="width: 170px; font-size: 16px">
+            <span id="searchStatus"></span>
+        </div>
         <div class="filter">
             <span class="filter-label">Century:</span>
             <span>from</span>
@@ -230,7 +230,7 @@
     </div>
     <div class="settings">
 
-        <div class="radio-toolbar" id="numbersToggle" title="Absolute: the number of quotations. Relative: the number of quotations per word of the sura or verse">
+        <div class="radio-toolbar" id="numbersToggle" title="Absolute: the number of citations. Relative: the number of citations divided by the number of words in the sura or verse">
             <span class="toolbar-label">Numbers:</span>
             <input type="radio" id="absoluteBtn" name="numbers" value="absolute" checked>
             <label for="absoluteBtn">absolute</label>
@@ -239,8 +239,8 @@
             <label for="relativeBtn">relative</label>
         </div>
 
-        <div class="radio-toolbar" id="locationsToggle" title="A quotation that occurs in several places in the Qurʾān (for example the basmala) is counted in its first place only, or in all its places">
-            <span class="toolbar-label">Count quotations at:</span>
+        <div class="radio-toolbar" id="locationsToggle" title="A quotation that occurs in several places in the Qurʾān (for example the basmala): its citations are counted in the first place only, or in all its places">
+            <span class="toolbar-label">Count citations at:</span>
             <input type="radio" id="firstLocationBtn" name="locations" value="first">
             <label for="firstLocationBtn">first location</label>
 

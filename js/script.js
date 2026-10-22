@@ -33,6 +33,7 @@ const allStatsFp = `${dataFolder}/@quran_data_stats_all_${release}.tsv`;
 
 // buttons:
 const resetBtn = document.getElementById("resetFiltersBtn");
+d3.select("#intro").text(`Explore verbatim citations of the Quran in the OpenITI corpus (release ${release.replaceAll("_", ".")}).`);
 resetBtn.addEventListener("click", resetFilters);
 d3.selectAll('input[name="plotType"]').on("change", () => updateVisuals());
 d3.select("#compareCentury").on("change", () => updateVisuals());
@@ -279,7 +280,7 @@ function filterVerseRows(rows, suraAya) {
 
 
 /* Draw a graph of the number of quotations of suras or verses: a lollipop plot (a bar for each sura or verse)
-   or (if the "heat map" button is checked) a heat map: a column for each sura or verse, the colour is the number of quotations.
+   or (if the "heat map" button is checked) a heat map: a column for each sura or verse, the colour is the number of citations.
    If "compare by century" is checked, the heat map has a row for each century and the bars are stacked by century.
    container: "#scatter1" or "#scatter2"
    data: the rows of the stats file (century, year, sura, aya, count), filtered
@@ -288,7 +289,7 @@ function filterVerseRows(rows, suraAya) {
 function createScatterPlot(container, data, xVar, yVar, title, sura, width) {
     const dataXVar = xVar;
     if (data.length === 0) {
-        d3.select(container).append("p").attr("class", "nodata").text("No quotations agree with the filters.");
+        d3.select(container).append("p").attr("class", "nodata").text("No citations agree with the filters.");
         return;
     }
     // the position of a row of the stats file in the graph: the sura, the verse or the running verse number
@@ -448,6 +449,10 @@ function createScatterPlot(container, data, xVar, yVar, title, sura, width) {
             yPos = d => panelTop(d.panel) + y(d[yVar]);
             yBase = d => panelTop(d.panel) + y(0);
         }
+        // the label of the y axis:
+        svg.append("text").attr("transform", "rotate(-90)").attr("x", -height / 2).attr("y", -margin.left + 12)
+            .attr("text-anchor", "middle").attr("font-size", 11).attr("fill", "#555")
+            .text(relative ? "citations per word" : "citations");
         position = d => [x(d[xVar]), yPos(d)];
     } else {
         // a heat map: a column for each sura or verse (a column for several verses if there are more than pixels),
@@ -506,7 +511,7 @@ function createScatterPlot(container, data, xVar, yVar, title, sura, width) {
             .attr("height", yb.bandwidth())
             .attr("fill", c => color(c.count))
             .style("pointer-events", "none")
-            .append("title").text(c => `${label(c.rep)}${compareByCentury ? `, century ${c.century}` : ""}: ${fmt(c.count)}`);
+            .append("title").text(c => `${label(c.rep)}${compareByCentury ? `, century ${c.century}` : ""}: ${fmt(c.count)} ${relative ? "citations per word" : "citations"}`);
 
         // a legend in the top margin: the colour scale:
         const gradient = root.append("defs").append("linearGradient").attr("id", `legend-${container.slice(1)}`);
@@ -673,7 +678,7 @@ function createScatterPlot(container, data, xVar, yVar, title, sura, width) {
         .attr("x", aboveGraph ? 0 : width / 2)
         .attr("y", aboveGraph ? -6 : margin.top)   // (a heat map or the bar plots of the centuries cover the top of the graph: the title is above it)
         .attr("text-anchor", aboveGraph ? "start" : "middle")
-        .text(relative ? `${title} (quotations per word)` : title);
+        .text(relative ? `${title} (citations per word)` : title);
 
     // draw the hint on top of the lines and dots:
     hint.raise();
@@ -819,7 +824,7 @@ function getVersesInPart(appearances){
 
 /* Merge the rows of the same quotation at different locations in the Quran
    (e.g. the basmala at the start of sura 1 and at the start of sura 2), and sum up the counts:
-   [{key: key of the first appearance of the quotation, count: count}, ...] sorted by frequency */
+   [{key: key of the first appearance of the quotation, count: count}, ...] sorted by the number of citations */
 function mergeFilteredNgrams(data){
     return mergeQuotations(filterNgrams(data), qTokensD, repeatedLookupD);
 }
@@ -852,7 +857,7 @@ function renderQuotationTable(quotations, caption, verseHtml, textHtml){
         return [verseHtml(q), textHtml ? textHtml(q) : quotationTextHtml(ngram.start, ngram.end), q.count];
     });
     // (the table is right to left: from the right, the columns are the verse, the quotation and the frequency)
-    let table = '<table dir="rtl"><tr><th>Verse</th><th>Quoted Quran text</th><th>frequency</th></tr>';
+    let table = '<table dir="rtl"><tr><th>Verse</th><th>Quoted Quran text</th><th>citations</th></tr>';
     top.forEach(arr => {
         table += "<tr>";
         arr.forEach(el => table += `<td>${el}</td>`);
@@ -866,7 +871,7 @@ function buildTable(data){
     console.log("Filtering data for the quotation-level table")
     const merged = mergeFilteredNgrams(data);
     renderQuotationTable(merged,
-        "Displaying the 300 most frequent quotations (out of ${n} that agree with the filters; the same quotation in different verses is counted as one):",
+        "Displaying the 300 most frequently cited quotations (out of ${n} that agree with the filters; the same quotation in different verses is counted as one):",
         q => getAllSuras(q.key));
 }
 
@@ -886,8 +891,8 @@ function showQuotationsOf(type, id){
         const merged = mergeFilteredNgrams(data);
         const inPart = filterQuotationsByRange(merged, repeatedNgramsD, qTokenIndexD, range[0], range[1]);
         renderQuotationTable(inPart,
-            `Quotations of ${name}: displaying the 300 most frequent quotations (out of \${n} that agree with the filters; ` +
-            `frequency: the number of times the quotation is cited in the corpus, wherever it occurs in the Qurʾān; ` +
+            `Quotations of ${name}: displaying the 300 most frequently cited quotations (out of \${n} that agree with the filters; ` +
+            `citations: the number of times the quotation is cited in the corpus, wherever it occurs in the Qurʾān; ` +
             `words in grey are outside the ${type}):`,
             q => getVersesInPart(q.appearances),
             q => quotationHtmlInRange(q, range));
@@ -1069,16 +1074,25 @@ function quotationHtml(suraAya, q, selectedToken) {
     return html.trimEnd();
 }
 
+/* "1 text", "2 texts" */
+function plural(n, one, many) {
+    return `${n} ${n === 1 ? one : many}`;
+}
+
 /* Show the quotations of a verse that contain a word (after a click on the word in the heat map),
-   with their frequency (the number of times that the quotation is cited in the corpus).
+   with the number of citations (the number of times that the quotation is cited in the corpus).
    A click on a quotation shows the texts in which it is cited. */
 function showQuotationsOfWord(suraAya, rows, word) {
     const quotations = quotationsAtWord(rows, word, NGRAM_LENGTH_OFFSET);
     const words = ayaTextD[suraAya].split(" ");
-    let html = `<p>Quotations of verse ${suraAya} that contain the word <span dir="rtl">${words[word - 1]}</span> ` +
-               `(${quotations.length} quotations; words in grey are in the neighbouring verses; ` +
-               `click on a quotation to see the texts in which it is cited):</p>`;
-    html += '<table dir="rtl"><tr><th>Quoted Quran text</th><th>times cited</th><th>texts</th></tr>';
+    // the citations of the verse that contain the word (a citation is one place in a text that cites a quotation):
+    const covering = rows.filter(d => d.ngram_start <= word && word <= d.ngram_start + d.ngram_length + NGRAM_LENGTH_OFFSET - 1);
+    const nTexts = new Set(covering.map(d => d.text_id)).size;
+    let html = `<p>${plural(quotations.length, "different quotation", "different quotations")} of verse ${suraAya} ` +
+               `${quotations.length === 1 ? "contains" : "contain"} the word <span dir="rtl">${words[word - 1]}</span>, ` +
+               `cited ${plural(covering.length, "time", "times")} in ${plural(nTexts, "text", "texts")} ` +
+               `(words in grey are in the neighbouring verses; click on a quotation to see the texts in which it is cited):</p>`;
+    html += '<table dir="rtl"><tr><th>Quoted Quran text</th><th>citations</th><th>texts</th></tr>';
     quotations.forEach((q, i) => {
         html += `<tr class="quotationRow" data-i="${i}" style="cursor: pointer">` +
                 `<td>${quotationHtml(suraAya, q, quranRanges.verses[suraAya][0] + word - 1)}</td><td>${q.count}</td><td>${q.nTexts}</td></tr>`;
@@ -1131,7 +1145,7 @@ function showTextsOfQuotation(suraAya, rows, q, div) {
         const filters = describeActiveFilters();
         let html = `<p>Cited ${q.count} ${q.count === 1 ? "time" : "times"} in ${texts.length} ${texts.length === 1 ? "text" : "texts"}` +
                    `${filters ? ` (filters: ${filters})` : ""}:</p>`;
-        html += '<table dir="ltr"><tr><th>year (AH)</th><th>text</th><th>times cited</th></tr>';
+        html += '<table dir="ltr"><tr><th>year (AH)</th><th>text</th><th>citations</th></tr>';
         texts.forEach(t => {
             html += `<tr><td>${t.year}</td><td>${textIds[t.textId] || ("text " + t.textId)}</td><td>${t.count}</td></tr>`;
         });
@@ -1145,6 +1159,12 @@ function showTextsOfQuotation(suraAya, rows, q, div) {
 
 /* The html of a verse in which each word is coloured by the number of quotations that contain the word
    (only the quotations that agree with the filters). */
+/* The tooltip of a word of the heat map */
+function wordTitle(count, nQuotations) {
+    return `this word is part of ${plural(count, "citation", "citations")} of this verse ` +
+           `(${plural(nQuotations, "different quotation", "different quotations")}). Click it to see the quotations.`;
+}
+
 function formatAyaHeatMap(suraAya, rows) {
     const ayaTokens = ayaTextD[suraAya].split(" ");
     const hits = searchHits(...quranRanges.verses[suraAya]);   // (the words of the search term: bold and italic)
@@ -1152,7 +1172,7 @@ function formatAyaHeatMap(suraAya, rows) {
     const counts = tokenCounts(rows, ayaTokens.length, NGRAM_LENGTH_OFFSET);
     const [min, max] = d3.extent(counts);
     if (max === 0) {
-        return `<p>${suraAya}: ${verseTextHtml(suraAya)}</p><p dir="ltr">There are no quotations of this verse that agree with the filters.</p>`;
+        return `<p>${suraAya}: ${verseTextHtml(suraAya)}</p><p dir="ltr">There are no citations of this verse that agree with the filters.</p>`;
     }
     const colorScale = (min === max)
         ? () => "orange"
@@ -1161,11 +1181,11 @@ function formatAyaHeatMap(suraAya, rows) {
             .range(["lightyellow", "orange", "purple"]);
     let html = `<p>${suraAya}: `;
     ayaTokens.forEach((token, i) => {
-        html += `<span data-word="${i + 1}" title="${counts[i]}" style="cursor: pointer; background-color: ${colorScale(counts[i])}">${markedWord(token, hits && hits.has(firstToken + i), false)} </span>`;
+        html += `<span data-word="${i + 1}" title="${wordTitle(counts[i], quotationsAtWord(rows, i + 1, NGRAM_LENGTH_OFFSET).length)}" style="direction: ltr; cursor: pointer; background-color: ${colorScale(counts[i])}">${markedWord(token, hits && hits.has(firstToken + i), false)} </span>`;
     });
-    html += `</p><p dir="ltr">Colour: the number of quotations that contain the word ` +
-            `(lightest: ${min}, darkest: ${max}; hover over a word to see its number; ` +
-            `click on a word to see the quotations that contain it).</p>` +
+    html += `</p><p dir="ltr">Colour represents the number of citations that contain the word ` +
+            `(lightest: ${min}, darkest: ${max}; hover over a word to see the exact number).</p>` +
+            `<p dir="ltr">Click on a word to see all quotations that contain it.</p>` +
             `<div id="wordDetails" dir="ltr"></div>`;
     return html;
 }
