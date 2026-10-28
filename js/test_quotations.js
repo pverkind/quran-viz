@@ -11,7 +11,10 @@ const path = require("node:path");
 const {quotationKey, buildRepeatedLookup, canonicalKey, parseQuotationKey, mergeQuotations, tokenCounts,
     buildRanges, appearancesOf, filterQuotationsByRange,
     textKey, segmentOf, continuationSegments, resolveWholeQuotations,
-    quotationsAtWord, textsOfQuotation, countByVerse, normaliseArabic, buildSearch, isExcludedQuotation} = require("./quotations.js");
+    quotationsAtWord, textsOfQuotation, countByVerse, parseImplicit, citedPieces, normaliseArabic, buildSearch, isExcludedQuotation,
+    textIdOfUri, milestoneOfToken, milestoneFileNumber, milestoneFileUrl, parseMilestoneFile, cleanMilestoneText, escapeHtml,
+    alignCitation, contextAround, loadCitationContext, citationsOfText,
+    borderShift, milestoneStart, exactMilestoneOfToken} = require("./quotations.js");
 
 const release = "2023_1_8";
 
@@ -361,6 +364,14 @@ test("whole quotations: a quotation of two verses (1:1 and 1:2)", async () => {
     assert.strictEqual(await resolveWholeQuotations("1.1", rows, deps), rows);
 });
 
+test("whole quotations: files with quote_start and quote_end need no neighbouring files", async () => {
+    const rows = [{ngram_start: 3, ngram_length: 2, text_tok_start: "20", text_tok_end: "27", quote_start: "2", quote_end: "5"}];
+    const loaded = [];
+    const result = await resolveWholeQuotations("1.1", rows, {loadRows: async v => { loaded.push(v); return []; }});
+    assert.deepStrictEqual(loaded, []);
+    assert.deepStrictEqual([result[0].qstart, result[0].qend, result[0].total], [2, 5, 4]);
+});
+
 test("whole quotations: rows that are a complete quotation do not change; one-word fragments are found", async () => {
     const rows = await resolveWholeQuotations("1.1", readVerseFile("1.1"), deps);
     const whole = rows.filter(d => d.ngram_start === 1 && d.ngram_length === 4 && (+d.text_tok_end) - (+d.text_tok_start) + 1 === 4);
@@ -477,6 +488,32 @@ test("counting the quotations per verse (a small example)", () => {
     assert.deepStrictEqual(Array.from(all), [[100 * 10000, 4], [100 * 10000 + 1, 4], [200 * 10000, 1], [200 * 10000 + 1, 1]]);
 });
 
+test("counting the quotations per verse: the words that an ellipsis only indicates can be left out", () => {
+    // verses a, b, c of 3 words each (tokens 0-2, 3-5, 6-8)
+    const toks = {}, index = {};
+    for (let i = 0; i < 9; i++) { const v = "abc"[Math.floor(i / 3)]; toks[i] = [`w${i}`, `${v}.${i % 3 + 1}`]; index[`${v}.${i % 3 + 1}`] = i; }
+    const verseOfToken = [0, 0, 0, 1, 1, 1, 2, 2, 2];
+    // the whole quotation: tokens 1-8; the words 2-6 (the rest of a, all of b, the start of c) are only indicated
+    const rows = [{start_token: 1, end_token: 8, year: 100, count: 2, implicit: "2-6"}];
+    assert.deepStrictEqual(Array.from(countByVerse(rows, toks, index, {}, verseOfToken, false)),
+                           [[100 * 10000, 2], [100 * 10000 + 1, 2], [100 * 10000 + 2, 2]]);
+    // the cited words are 1 (in a) and 7-8 (in c): b is not counted
+    assert.deepStrictEqual(Array.from(countByVerse(rows, toks, index, {}, verseOfToken, false, null, true)),
+                           [[100 * 10000, 2], [100 * 10000 + 2, 2]]);
+    // a quotation with the cited words in one verse is counted once in the verse:
+    const inOne = [{start_token: 0, end_token: 2, year: 100, count: 1, implicit: "1-1"}];
+    assert.deepStrictEqual(Array.from(countByVerse(inOne, toks, index, {}, verseOfToken, false, null, true)), [[100 * 10000, 1]]);
+    // the other location of a repeated quotation (the implicit words move with it)
+    const repeated = {"a.3.3": ["c.3"]};    // the quotation of 3 words that ends at a.3 also ends at c.3
+    assert.deepStrictEqual(Array.from(countByVerse(inOne, toks, index, repeated, verseOfToken, true, null, true)),
+                           [[100 * 10000, 1], [100 * 10000 + 2, 1]]);
+    assert.strictEqual(parseImplicit(""), null);
+    assert.deepStrictEqual(parseImplicit("3-5;9-9"), [[3, 5], [9, 9]]);
+    assert.deepStrictEqual(citedPieces(1, 8, [[2, 6]]), [[1, 1], [7, 8]]);
+    assert.deepStrictEqual(citedPieces(1, 8, [[0, 3], [6, 9]]), [[4, 5]]);
+    assert.deepStrictEqual(citedPieces(1, 3, [[1, 3]]), []);
+});
+
 test("normalising Arabic for the search", () => {
     assert.strictEqual(normaliseArabic("ٱلْمُسْتَقِيمَ"), "المستقيم");
     assert.strictEqual(normaliseArabic("الرَّحْمَٰنِ"), "الرحمن");
@@ -555,4 +592,206 @@ test("excluding frequent quotations", () => {
     const total = rows.reduce((sum, d) => sum + d.count, 0);
     const keptTotal = kept.reduce((sum, d) => sum + d.count, 0);
     assert.ok(keptTotal < total && keptTotal > total * 0.5);
+});
+
+
+// the citation in its context: the milestones of the i.mech-20 repository
+// (a test text of 650 words: the word w<number> is token <number>; milestones of 300 words; "(@)" is a newline)
+const fakeWord = i => "كلمة" + "ابجدهوزحطي"[i % 10].repeat(1 + Math.floor(i / 10) % 3) + "ن".repeat(1 + Math.floor(i / 30) % 7);
+const fakeTokens = Array.from({length: 650}, (_, i) => fakeWord(i));
+const fakeMilestones = new Map();
+for (let ms = 1; ms <= 3; ms++) {
+    const words = fakeTokens.slice((ms - 1) * 300, ms * 300);
+    fakeMilestones.set(ms, "(@)(@@) " + words.slice(0, 100).join(" ") + "(@)" + words.slice(100).join(" ") + " ");
+}
+const fakeFile = "ms1\t" + fakeMilestones.get(1) + "\nms2\t" + fakeMilestones.get(2) + "\nms3\t" + fakeMilestones.get(3) + "\n";
+
+test("the milestone and the file of a token", () => {
+    assert.deepStrictEqual([0, 299, 300, 5999, 6000].map(milestoneOfToken), [1, 1, 2, 20, 21]);
+    assert.deepStrictEqual([1, 20, 21, 40, 41].map(milestoneFileNumber), [20, 20, 40, 40, 60]);
+    assert.strictEqual(milestoneFileUrl("2023_1_8", "JK000698-ara1.completed", 21),
+        "https://raw.githubusercontent.com/OpenITI/i.mech-20/v2023.1.8/data/JK000698-ara1.completed-00040");
+    assert.strictEqual(textIdOfUri("0458Bayhaqi.Ictiqad.JK000698-ara1.completed"), "JK000698-ara1.completed");
+    assert.strictEqual(textIdOfUri("0505Ghazali.IhyaCulumDin.JK000001-ara1"), "JK000001-ara1");
+});
+
+test("a milestone file is parsed and cleaned", () => {
+    const milestones = parseMilestoneFile(fakeFile);
+    assert.deepStrictEqual(Array.from(milestones.keys()), [1, 2, 3]);
+    assert.strictEqual(milestones.get(2), fakeMilestones.get(2));
+    assert.strictEqual(cleanMilestoneText("(@)(@@) a b(@)(@@) c(@)"), "\na b\nc\n");
+    assert.strictEqual(escapeHtml("a<b>&c"), "a&lt;b&gt;&amp;c");
+});
+
+test("the context of a citation inside a milestone and across milestones", () => {
+    const milestones = parseMilestoneFile(fakeFile);
+    let c = contextAround(milestones, 50, 53, 5, 3);
+    assert.deepStrictEqual(c.quoteTokens, fakeTokens.slice(50, 54));
+    assert.strictEqual(c.quote, fakeTokens.slice(50, 54).join(" "));
+    assert.strictEqual(c.before.trim(), fakeTokens.slice(45, 50).join(" "));
+    assert.strictEqual(c.after.trim(), fakeTokens.slice(54, 57).join(" "));
+    // a citation across the border of two milestones, with context in both:
+    c = contextAround(milestones, 298, 301, 4, 4);
+    assert.deepStrictEqual(c.quoteTokens, fakeTokens.slice(298, 302));
+    assert.strictEqual(c.before.replace(/\s+/g, " ").trim(), fakeTokens.slice(294, 298).join(" "));
+    assert.strictEqual(c.after.replace(/\s+/g, " ").trim(), fakeTokens.slice(302, 306).join(" "));
+    // the start and the end of the text: less context
+    c = contextAround(milestones, 2, 3, 10, 2);
+    assert.strictEqual(c.before.trim(), fakeTokens.slice(0, 2).join(" "));
+    c = contextAround(milestones, 648, 649, 2, 10);
+    assert.strictEqual(c.after.trim(), "");
+});
+
+test("a citation that is not in the milestones", () => {
+    const milestones = parseMilestoneFile(fakeFile);
+    assert.strictEqual(contextAround(milestones, 1000, 1002, 5, 5), null);
+});
+
+test("a milestone with fewer or more words than 300 displaces the citation: it is found by the words of the Qurʾān", () => {
+    // milestones that are cut after the given numbers of words (as in the i.mech-20 repository: some have 299 or 301)
+    const cut = sizes => {
+        const milestones = new Map();
+        let start = 0;
+        sizes.forEach((size, i) => {
+            milestones.set(i + 1, fakeTokens.slice(start, start + size).join(" ") + " ");
+            start += size;
+        });
+        return milestones;
+    };
+    const quran = fakeTokens.slice(400, 405);
+    // the first milestone has one word less: the words after it are one word later than the index says
+    let c = contextAround(cut([299, 300, 51]), 400, 404, 3, 3, quran);
+    assert.deepStrictEqual(c.quoteTokens, fakeTokens.slice(400, 405));
+    assert.strictEqual(c.shift, 1);
+    assert.ok(c.matchesQuran);
+    assert.strictEqual(c.before.trim(), fakeTokens.slice(397, 400).join(" "));
+    // one word more: they are one word earlier
+    c = contextAround(cut([301, 300, 49]), 400, 404, 3, 3, quran);
+    assert.deepStrictEqual(c.quoteTokens, fakeTokens.slice(400, 405));
+    assert.strictEqual(c.shift, -1);
+    // no shift
+    c = contextAround(cut([300, 300, 50]), 400, 404, 3, 3, quran);
+    assert.strictEqual(c.shift, 0);
+    // the words of the Qurʾān are not in the text: the index is used as it is, with a warning
+    c = contextAround(cut([300, 300, 50]), 400, 404, 3, 3, ["ابتث", "ثجحخ", "دذرز"]);
+    assert.strictEqual(c.shift, 0);
+    assert.ok(!c.matchesQuran);
+    // without the words of the Qurʾān the index is used as it is
+    assert.strictEqual(contextAround(cut([299, 300, 51]), 400, 404, 3, 3).shift, 0);
+});
+
+test("the words of the Qurʾān are compared with the text (alignCitation)", () => {
+    const tokens = new Map(["بِسْمِ", "اللَّهِ", "الرَّحْمَٰنِ", "الرَّحِيمِ", "قال"].map((w, i) => [i + 10, w]));
+    const quran = ["بِسْمِ", "ٱللَّهِ", "ٱلرَّحْمَٰنِ", "ٱلرَّحِيمِ"];
+    assert.deepStrictEqual(alignCitation(tokens, 10, 13, quran), {shift: 0, matches: true});
+    assert.deepStrictEqual(alignCitation(tokens, 11, 14, quran), {shift: -1, matches: true});
+    assert.deepStrictEqual(alignCitation(tokens, 8, 11, quran), {shift: 2, matches: true});
+    assert.deepStrictEqual(alignCitation(tokens, 10, 13, ["مالك", "يوم", "الدين"]), {shift: 0, matches: false});
+});
+
+test("loading the context: the files that are needed, and a missing file after the end of the text", async () => {
+    const requested = [];
+    const fetchText = async url => {
+        requested.push(url);
+        if (url.endsWith("-00020")) return fakeFile;
+        throw new Error("404");
+    };
+    const c = await loadCitationContext("2023_1_8", "X-ara1", 100, 103, 20, 20, fetchText, fakeTokens.slice(100, 104));
+    assert.deepStrictEqual(requested, ["https://raw.githubusercontent.com/OpenITI/i.mech-20/v2023.1.8/data/X-ara1-00020"]);
+    assert.deepStrictEqual(c.quoteTokens, fakeTokens.slice(100, 104));
+    assert.ok(c.matchesQuran);
+    // the context of a citation near the end of a file may be in the next file, which does not exist here:
+    const end = await loadCitationContext("2023_1_8", "X-ara1", 646, 648, 5, 5000, fetchText);
+    assert.strictEqual(end.quote, fakeTokens.slice(646, 649).join(" "));
+    // a citation in a file that does not exist rejects:
+    await assert.rejects(loadCitationContext("2023_1_8", "X-ara1", 7000, 7002, 5, 5, fetchText));
+});
+
+test("the places in a text that cite a quotation", () => {
+    const rows = [
+        {text_id: "7", text_tok_start: "900", text_tok_end: "903", qstart: 10, qend: 13},
+        {text_id: "7", text_tok_start: "100", text_tok_end: "103", qstart: 10, qend: 13},
+        {text_id: "7", text_tok_start: "100", text_tok_end: "103", qstart: 10, qend: 13},   // (the same place: once)
+        {text_id: "7", text_tok_start: "500", text_tok_end: "504", qstart: 10, qend: 14},
+        {text_id: "8", text_tok_start: "1", text_tok_end: "4", qstart: 10, qend: 13},
+    ];
+    assert.deepStrictEqual(citationsOfText(rows, 10, 13, "7"), [{start: 100, end: 103}, {start: 900, end: 903}]);
+    assert.deepStrictEqual(citationsOfText(rows, 10, 13, "9"), []);
+});
+
+// the exact milestone borders (the shifts of @milestone_borders_<release>.json, made by quran-tag/helpers/milestone_borders.py)
+test("the exact milestone of a token, with the shifts of the text", () => {
+    assert.strictEqual(borderShift(1, []), 0);
+    assert.strictEqual(borderShift(2, [[3, -1], [5, 0]]), 0);
+    assert.strictEqual(borderShift(3, [[3, -1], [5, 0]]), -1);
+    assert.strictEqual(borderShift(4, [[3, -1], [5, 0]]), -1);
+    assert.strictEqual(borderShift(5, [[3, -1], [5, 0]]), 0);
+    assert.strictEqual(milestoneStart(3, [[3, -1]]), 599);
+    // without shifts it is the estimate
+    for (const t of [0, 299, 300, 5999, 6000]) {
+        assert.strictEqual(exactMilestoneOfToken(t, []), milestoneOfToken(t));
+    }
+    // every token of random texts (the milestones have 298-302 tokens), compared with the lengths of the milestones:
+    let seed = 7;
+    const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+    for (let n = 0; n < 30; n++) {
+        const counts = Array.from({length: 1 + Math.floor(rnd() * 40)}, () => [300, 300, 300, 300, 299, 301, 302, 298][Math.floor(rnd() * 8)]);
+        const starts = [0];
+        counts.forEach(c => starts.push(starts[starts.length - 1] + c));
+        // the shifts, as the Python script makes them (the end of the text is added if the last milestone is longer than 300):
+        const shifts = [];
+        let previous = 0;
+        starts.forEach((start, i) => {
+            if (i === starts.length - 1 && start - starts[i - 1] <= 300) return;
+            const shift = start - 300 * i;
+            if (shift !== previous) {
+                shifts.push([i + 1, shift]);
+                previous = shift;
+            }
+        });
+        counts.forEach((count, i) => {
+            for (let k = 0; k < count; k++) {
+                assert.strictEqual(exactMilestoneOfToken(starts[i] + k, shifts), i + 1, `${counts} ${i + 1} ${k}`);
+            }
+            assert.strictEqual(milestoneStart(i + 1, shifts), starts[i]);
+        });
+    }
+});
+
+test("the context of a citation with the shifts of the text: the exact place, without searching", async () => {
+    const cut = sizes => {
+        const milestones = new Map();
+        let start = 0;
+        sizes.forEach((size, i) => {
+            milestones.set(i + 1, fakeTokens.slice(start, start + size).join(" ") + " ");
+            start += size;
+        });
+        return milestones;
+    };
+    const shifts = [[2, -1], [3, 0]];     // the first milestone has 299 words, the second 301
+    const milestones = cut([299, 301, 50]);
+    const quran = fakeTokens.slice(400, 405);
+    let c = contextAround(milestones, 400, 404, 3, 3, quran, shifts);
+    assert.deepStrictEqual(c.quoteTokens, fakeTokens.slice(400, 405));
+    assert.strictEqual(c.shift, 0);
+    assert.ok(c.matchesQuran);
+    assert.strictEqual(c.before.trim(), fakeTokens.slice(397, 400).join(" "));
+    assert.strictEqual(c.after.trim(), fakeTokens.slice(405, 408).join(" "));
+    // a citation in the milestone that is longer than 300 words, at its end:
+    c = contextAround(milestones, 598, 599, 2, 2, fakeTokens.slice(598, 600), shifts);
+    assert.deepStrictEqual(c.quoteTokens, fakeTokens.slice(598, 600));
+    assert.ok(c.matchesQuran);
+    // the words of the Qurʾān are not in the citation (the milestones are not those of the text): a warning
+    c = contextAround(milestones, 400, 404, 3, 3, ["ابتث", "ثجحخ", "دذرز"], shifts);
+    assert.strictEqual(c.shift, 0);
+    assert.ok(!c.matchesQuran);
+    // loading: only the files that are needed
+    const requested = [];
+    const fetchText = async url => {
+        requested.push(url);
+        return "ms1\t" + milestones.get(1) + "\nms2\t" + milestones.get(2) + "\nms3\t" + milestones.get(3) + "\n";
+    };
+    c = await loadCitationContext("2023_1_8", "X-ara1", 400, 404, 3, 3, fetchText, quran, shifts);
+    assert.deepStrictEqual(requested, ["https://raw.githubusercontent.com/OpenITI/i.mech-20/v2023.1.8/data/X-ara1-00020"]);
+    assert.deepStrictEqual(c.quoteTokens, fakeTokens.slice(400, 405));
 });

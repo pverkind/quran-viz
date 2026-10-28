@@ -33,12 +33,13 @@ const allStatsFp = `${dataFolder}/@quran_data_stats_all_${release}.tsv`;
 
 // buttons:
 const resetBtn = document.getElementById("resetFiltersBtn");
-d3.select("#intro").text(`Explore verbatim citations of the Quran in the OpenITI corpus (release ${release.replaceAll("_", ".S")}).`);
+d3.select("#intro").text(`Explore verbatim citations of the Quran in the OpenITI corpus (release ${release.replaceAll("_", ".")}).`);
 resetBtn.addEventListener("click", resetFilters);
 d3.selectAll('input[name="plotType"]').on("change", () => updateVisuals());
 d3.select("#compareCentury").on("change", () => updateVisuals());
 d3.selectAll('input[name="locations"]').on("change", () => updateData());
 d3.selectAll('input[name="frequent"]').on("change", frequentModeChanged);
+d3.selectAll('input[name="ellipsis"]').on("change", () => updateData());
 d3.select("#searchInput").on("change", applySearch);
 d3.selectAll('input[name="numbers"]').on("change", () => updateVisuals());
 const suraVizBtn = document.getElementById("suraVizBtn");
@@ -49,7 +50,7 @@ const tableVizBtn =  document.getElementById("tableVizBtn");
 tableVizBtn.addEventListener("click", buildTableViz);
 
 // global variables, to be filled in asynchronously:
-var maxAyaY, qdata, ngrams;
+var maxAyaY, qdata, ngrams, statsPromise;
 var ayaTextD = new Object();         // sura.aya: aya text
 var ayaTokenIndexD = new Object();   // sura.aya: running aya number
 var qTokensD = new Object();         // token index in Quran: [token, sura.aya.ayatokindex]
@@ -108,6 +109,9 @@ function removeAllGraphs(){
    ignore: {sura: true, aya: true}: do not use the sura / aya filter
    (the aya filter only affects the graphs of verses: not the graph of suras, nor the quotations of a verse) */
 function filterArray(data, ignore = {}) {
+    if (!data) {
+        return [];   // (the data is still loading)
+    }
     const centuryMin = +d3.select("#centuryInputMin").property("value");
     const centuryMax = +d3.select("#centuryInputMax").property("value");
     const yearMin = +d3.select("#yearInputMin").property("value");
@@ -133,14 +137,24 @@ function filterArray(data, ignore = {}) {
 
 /* The key of the data of the graphs (see computeQdata) */
 function dataKey(allLocations) {
-    return `${allLocations}|${search ? search.term : ""}|${excluded.size ? excludedVersion : ""}`;
+    return `${allLocations}|${search ? search.term : ""}|${excluded.size ? excludedVersion : ""}|${ignoreImplicit()}`;
+}
+
+/* Whether the words that an ellipsis only indicates (not cited in the text) are left out of the counts */
+function ignoreImplicit() {
+    return document.getElementById("ignoreEllipsisBtn").checked;
+}
+
+/* Whether the graphs show the stats file (the quotations at their first location, without any other settings) */
+function showsStatsFile(allLocations) {
+    return !allLocations && !search && excluded.size === 0 && !ignoreImplicit();
 }
 
 /* The data of the graphs: the quotations at their first location in the Qurʾān (the stats file),
    or (if "all locations" is checked and/or there is a search term, and the data is ready) the data of computeQdata */
 function currentQdata() {
     const allLocations = document.getElementById("allLocationsBtn").checked;
-    if (!allLocations && !search && excluded.size === 0) {
+    if (showsStatsFile(allLocations)) {
         return qdata;
     }
     return qdataCache.get(dataKey(allLocations)) || qdata;
@@ -154,6 +168,7 @@ function computeQdata(allLocations) {
     const key = dataKey(allLocations);
     const current = search;
     const excludedNow = excluded;
+    const ignoreNow = ignoreImplicit();
     return Promise.all([loadNgrams(), repeatedNgramsReady]).then(([rows]) => {
         if (qdataCache.has(key)) {
             return;
@@ -162,7 +177,7 @@ function computeQdata(allLocations) {
         if (excludedNow.size) {
             used = used.filter(d => !isExcludedQuotation(excludedNow, qTokensD, repeatedLookupD, d.start_token, d.end_token));
         }
-        const counts = countByVerse(used, qTokensD, qTokenIndexD, repeatedNgramsD, verseOfToken, allLocations, current);
+        const counts = countByVerse(used, qTokensD, qTokenIndexD, repeatedNgramsD, verseOfToken, allLocations, current, ignoreNow);
         qdataCache.set(key, Array.from(counts, ([id, count]) => {
             const year = Math.floor(id / 10000);
             const sura_aya = ayaKeys[id % 10000];
@@ -180,11 +195,21 @@ function updateData() {
     const allLocations = document.getElementById("allLocationsBtn").checked;
     const status = d3.select("#locationsStatus");
     const key = dataKey(allLocations);
-    if ((!allLocations && !search && excluded.size === 0) || qdataCache.has(key)) {
+    if (showsStatsFile(allLocations) && !qdata) {
+        status.text("Loading the data of the first locations...");
+        loadStats()
+            .then(() => {
+                if (key === dataKey(document.getElementById("allLocationsBtn").checked)) {
+                    status.text("");
+                    updateVisuals();
+                }
+            })
+            .catch(error => { console.error(error); status.text("The counts could not be loaded."); });
+    } else if (showsStatsFile(allLocations) || qdataCache.has(key)) {
         status.text("");
         updateVisuals();
     } else {
-        status.text(search ? "Searching..." : (excluded.size && !allLocations ? "Counting..." : "Counting at all locations..."));
+        status.text(search ? "Searching..." : ((excluded.size || ignoreImplicit()) && !allLocations ? "Counting..." : "Counting at all locations..."));
         computeQdata(allLocations)
             .then(() => {
                 if (key === dataKey(document.getElementById("allLocationsBtn").checked)) {   // (the user has not changed the settings again)
@@ -346,7 +371,9 @@ function filterVerseRows(rows, suraAya) {
     const lenMin = +d3.select("#lenInputMin").property("value");
     const lenMax = +d3.select("#lenInputMax").property("value");
     // (the length is the length of the whole quotation, not only of its part in this verse)
+    const ignore = ignoreImplicit();
     return filterArray(rows, {sura: true, aya: true}).filter(d => d.total >= lenMin && d.total <= lenMax &&
+        !(ignore && d.implicit === "1") &&   // (the words that an ellipsis only indicates)
         (!search || termInVerse(d, suraAya)) &&
         !isExcludedQuotation(excluded, qTokensD, repeatedLookupD, d.qstart, d.qend));
 }
@@ -956,6 +983,24 @@ function buildTable(data){
 function showQuotationsOf(type, id){
     tableSelection = {type, id};
     const thisSelection = ++selectionCounter;
+    if (type === "verse") {
+        // the quotations of a verse: the same table as for a word of the heat map (with the texts that cite a quotation)
+        const [sura, aya] = id.split(".");
+        d3.select("#table").html(`<div><p>Loading the quotations of verse ${id}...</p></div>`);
+        loadResolvedAyaData(sura, aya).then(rows => {
+            if (thisSelection !== selectionCounter) {
+                return;   // the user has clicked on something else in the meantime
+            }
+            d3.select("#table").html('<div id="verseQuotations" dir="ltr"></div>');
+            showQuotationTable(id, filterVerseRows(rows, id), null, "#verseQuotations");
+        }).catch(error => {
+            console.error(error);
+            if (thisSelection === selectionCounter) {
+                d3.select("#table").html(`<div><p>The quotations of verse ${id} could not be loaded.</p></div>`);
+            }
+        });
+        return;
+    }
     const range = (type === "sura") ? quranRanges.suras[id] : quranRanges.verses[id];
     const name = (type === "sura") ? `sura ${id}` : `verse ${id}`;
     d3.select("#table").html(`<div><p>Loading the quotations of ${name}...</p></div>`);
@@ -1134,7 +1179,7 @@ function showAyaHeatMap(suraAya) {
 var textIdsPromise;
 function loadTextIds() {
     if (!textIdsPromise) {
-        textIdsPromise = d3.json("resources/_text_ids.json");
+        textIdsPromise = d3.json("resources/@text_ids.json");
         textIdsPromise.catch(() => { textIdsPromise = undefined; });   // (so that it can be tried again)
     }
     return textIdsPromise;
@@ -1163,27 +1208,34 @@ function plural(n, one, many) {
    with the number of citations (the number of times that the quotation is cited in the corpus).
    A click on a quotation shows the texts in which it is cited. */
 function showQuotationsOfWord(suraAya, rows, word) {
+    showQuotationTable(suraAya, rows, word, "#wordDetails");
+}
+
+/* The table of the quotations of a verse that contain a word, or of all its quotations (word is null), in an element */
+function showQuotationTable(suraAya, rows, word, target) {
     const quotations = quotationsAtWord(rows, word, NGRAM_LENGTH_OFFSET);
     const words = ayaTextD[suraAya].split(" ");
     // the citations of the verse that contain the word (a citation is one place in a text that cites a quotation):
-    const covering = rows.filter(d => d.ngram_start <= word && word <= d.ngram_start + d.ngram_length + NGRAM_LENGTH_OFFSET - 1);
+    const covering = word === null ? rows
+        : rows.filter(d => d.ngram_start <= word && word <= d.ngram_start + d.ngram_length + NGRAM_LENGTH_OFFSET - 1);
     const nTexts = new Set(covering.map(d => d.text_id)).size;
-    let html = `<p>${plural(quotations.length, "different quotation", "different quotations")} of verse ${suraAya} ` +
-               `${quotations.length === 1 ? "contains" : "contain"} the word <span dir="rtl">${words[word - 1]}</span>, ` +
+    const what = word === null ? "" : ` ${quotations.length === 1 ? "contains" : "contain"} the word <span dir="rtl">${words[word - 1]}</span>,`;
+    let html = `<p>${plural(quotations.length, "different quotation", "different quotations")} of verse ${suraAya}${what} ` +
                `cited ${plural(covering.length, "time", "times")} in ${plural(nTexts, "text", "texts")} ` +
                `(words in grey are in the neighbouring verses; click on a quotation to see the texts in which it is cited):</p>`;
     html += '<table dir="rtl"><tr><th>Quoted Quran text</th><th>citations</th><th>texts</th></tr>';
-    quotations.forEach((q, i) => {
+    quotations.slice(0, word === null ? 300 : undefined).forEach((q, i) => {
+        const selectedToken = word === null ? null : quranRanges.verses[suraAya][0] + word - 1;
         html += `<tr class="quotationRow" data-i="${i}" style="cursor: pointer">` +
-                `<td>${quotationHtml(suraAya, q, quranRanges.verses[suraAya][0] + word - 1)}</td><td>${q.count}</td><td>${q.nTexts}</td></tr>`;
+                `<td>${quotationHtml(suraAya, q, selectedToken)}</td><td>${q.count}</td><td>${q.nTexts}</td></tr>`;
     });
     html += '</table>';
-    d3.select("#wordDetails").html(html);
-    d3.selectAll("#wordDetails tr.quotationRow").on("click", function() {
+    d3.select(target).html(html);
+    d3.selectAll(`${target} tr.quotationRow`).on("click", function() {
         // the texts are shown in a row right below the quotation; a second click on the quotation closes it:
         const wasOpen = this.nextElementSibling && this.nextElementSibling.classList.contains("textsRow");
-        d3.selectAll("#wordDetails tr.textsRow").remove();
-        d3.selectAll("#wordDetails tr.quotationRow").style("background-color", null);
+        d3.selectAll(`${target} tr.textsRow`).remove();
+        d3.selectAll(`${target} tr.quotationRow`).style("background-color", null);
         if (wasOpen) {
             return;
         }
@@ -1217,6 +1269,96 @@ function describeActiveFilters() {
     return parts.join(", ");
 }
 
+// the number of words that are shown before and after a citation:
+const CONTEXT_WORDS = 40;
+var milestoneFiles = new Map();   // url of a file of the i.mech-20 repository: promise of its text
+
+/* The text of a file of the i.mech-20 repository (each file is loaded once) */
+function fetchMilestoneFile(url) {
+    if (!milestoneFiles.has(url)) {
+        const promise = fetch(url).then(response => {
+            if (!response.ok) {
+                throw new Error(`${url}: ${response.status}`);
+            }
+            return response.text();
+        });
+        promise.catch(() => milestoneFiles.delete(url));   // (so that it can be tried again)
+        milestoneFiles.set(url, promise);
+    }
+    return milestoneFiles.get(url);
+}
+
+/* The places where the milestones of each text deviate from 300 tokens (see quotations.js, borderShift):
+   a promise of the content of @milestone_borders_<release>.json, or of undefined if there is no such file
+   (then the position of a citation in the milestones is estimated) */
+var milestoneBordersPromise;
+function loadMilestoneBorders() {
+    if (!milestoneBordersPromise) {
+        milestoneBordersPromise = d3.json(`${dataFolder}/@milestone_borders_${release}.json`).catch(error => {
+            console.warn("The milestone borders could not be loaded: the place of the citations is estimated.", error);
+            return undefined;
+        });
+    }
+    return milestoneBordersPromise;
+}
+
+/* Show a citation in its context (the words before and after it) in an element:
+   textUri: the version URI of the text; citation: {start, end}, the first and the last token of the citation in the text;
+   q: the quotation (qstart and qend: its words in the Qurʾān, used to check that the right words are shown) */
+function showCitationContext(textUri, citation, q, element) {
+    element.html("Loading the text...");
+    const quranWords = [];
+    for (let i = q.qstart; i <= q.qend; i++) {
+        quranWords.push(qTokensD[i][0]);
+    }
+    const textId = textIdOfUri(textUri);
+    loadMilestoneBorders().then(borders => {
+        // (a text that is not in the file has milestones of 300 tokens; without the file they are estimated)
+        const shifts = borders ? (borders.data[textId] || []) : undefined;
+        return loadCitationContext(release, textId, citation.start, citation.end, CONTEXT_WORDS, CONTEXT_WORDS,
+                                   fetchMilestoneFile, quranWords, shifts);
+    }).then(context => {
+        if (!context) {
+            element.html("This place was not found in the text of the milestones.");
+            return;
+        }
+        const paragraph = text => escapeHtml(text).replace(/\n/g, "<br>");
+        let html = `<div dir="rtl" style="font-size: 20px; line-height: 1.8">${paragraph(context.before)}` +
+                   `<mark>${paragraph(context.quote)}</mark>${paragraph(context.after)}</div>`;
+        if (!context.matchesQuran) {
+            html += '<p dir="ltr" style="color: #a00">Warning: the words of the Qurʾān are not (all) in the highlighted words. ' +
+                    'The text of the milestones may differ from the text that was analysed.</p>';
+        }
+        element.html(html);
+    }).catch(error => {
+        console.error(error);
+        element.html("The text could not be loaded (click again to try again).");
+    });
+}
+
+/* Show the places in a text that cite a quotation, each with a link to its context, in the table cell */
+function showCitationsOfText(textUri, citations, q, cell) {
+    if (!textUri) {
+        cell.html("<p>The name of the text is not known.</p>");
+        return;
+    }
+    cell.html(`<p>${plural(citations.length, "place", "places")} in the text (words are counted from the start of the text):</p>`);
+    citations.forEach(c => {
+        const item = cell.append("div").style("margin-bottom", "8px");
+        const link = item.append("a").attr("href", "#").style("cursor", "pointer")
+            .text(`words ${c.start + 1}-${c.end + 1}: show in context`);
+        const context = item.append("div");
+        const show = () => showCitationContext(textUri, c, q, context);
+        link.on("click", event => {
+            event.preventDefault();
+            show();
+        });
+        if (citations.length === 1) {
+            show();   // (one place: no need to click)
+        }
+    });
+}
+
 /* Show the texts in which a quotation of a verse is cited (earliest first) in the table cell */
 function showTextsOfQuotation(suraAya, rows, q, div) {
     const texts = textsOfQuotation(rows, q.qstart, q.qend);
@@ -1227,10 +1369,26 @@ function showTextsOfQuotation(suraAya, rows, q, div) {
                    `${filters ? ` (filters: ${filters})` : ""}:</p>`;
         html += '<table dir="ltr"><tr><th>year (AH)</th><th>text</th><th>citations</th></tr>';
         texts.forEach(t => {
-            html += `<tr><td>${t.year}</td><td>${textIds[t.textId] || ("text " + t.textId)}</td><td>${t.count}</td></tr>`;
+            html += `<tr class="textRow" data-text="${t.textId}" style="cursor: pointer" title="Click to see the citations in their context">` +
+                    `<td>${t.year}</td><td>${textIds[t.textId] || ("text " + t.textId)}</td><td>${t.count}</td></tr>`;
         });
         html += "</table>";
         div.html(html);
+        div.selectAll("tr.textRow").on("click", function() {
+            // the citations are shown in a row right below the text; a second click on the text closes it:
+            const wasOpen = this.nextElementSibling && this.nextElementSibling.classList.contains("citationsRow");
+            div.selectAll("tr.citationsRow").remove();
+            div.selectAll("tr.textRow").style("background-color", null);
+            if (wasOpen) {
+                return;
+            }
+            d3.select(this).style("background-color", "#e5e5e5");
+            const textId = this.dataset.text;
+            const cell = d3.select(this.parentNode.insertBefore(document.createElement("tr"), this.nextSibling))
+                .attr("class", "citationsRow")
+                .append("td").attr("colspan", 3).attr("dir", "ltr");
+            showCitationsOfText(textIds[textId], citationsOfText(rows, q.qstart, q.qend, textId), q, cell);
+        });
     }).catch(error => {
         console.error(error);
         div.html("<p>The names of the texts could not be loaded.</p>");
@@ -1285,29 +1443,45 @@ function calculateLargestCount(qdata) {
 // build the filters:
 setupFilters();
 
-// load the reuse data:
-d3.dsv("\t", allStatsFp).then(function(data) {
-    //header: century	year	sura	aya	count
+/* Load (once) the stats file: the quotations at their first location in the Qurʾān.
+   It is only needed for the "first location" graphs, so it is loaded when the user asks for them. */
+function loadStats() {
+    if (!statsPromise) {
+        statsPromise = d3.dsv("\t", allStatsFp).then(function(data) {
+            //header: century	year	sura	aya	count
 
-    // make sure the relevant data are formatted as numbers
-    // and add a column to identify each aya:
-    data.forEach(d => {
-        d.sura = +d.sura;
-        d.aya = +d.aya;
-        d.count = +d.count;
-        d.century = +d.century;
-        d.year = +d.year;
-        d.sura_aya = `${d.sura}.${d.aya}`;
-    });
-    qdata = data;
+            // make sure the relevant data are formatted as numbers
+            // and add a column to identify each aya:
+            data.forEach(d => {
+                d.sura = +d.sura;
+                d.aya = +d.aya;
+                d.count = +d.count;
+                d.century = +d.century;
+                d.year = +d.year;
+                d.sura_aya = `${d.sura}.${d.aya}`;
+            });
+            qdata = data;
+            // the number of times the most frequently reused aya is used
+            maxAyaY = calculateLargestCount(qdata);
+            return data;
+        });
+        statsPromise.catch(() => { statsPromise = undefined; });   // (so that it can be tried again)
+    }
+    return statsPromise;
+}
 
-    // calculate the number of times the most frequently reused aya is used 
-    // (to set the maximum value on the Y axis to the same value for each aya) 
-    maxAyaY = calculateLargestCount(qdata);
-    console.log("Most frequently reused verse: reused "+maxAyaY+" times");
+// start the big downloads at the same time (the parsing of each of them starts when it has arrived):
+const quranTextPromise = d3.text(quranTextFp);
+const repeatedJsonPromise = d3.json("resources/first_repeated_quran_ngrams.json");
+if (document.getElementById("allLocationsBtn").checked) {
+    loadNgrams();   // (all locations is the default: the counts are made of the ngrams)
+} else {
+    loadStats();
+}
+d3.select("#locationsStatus").text("Loading the data...");
 
-    // load the Quran text:
-    d3.text(quranTextFp).then(function(qtext) {
+{
+    quranTextPromise.then(function(qtext) {
         // add a header:
         qtext = "sura|aya|aya_text\n" + qtext;
         // remove the metadata footer:
@@ -1346,15 +1520,15 @@ d3.dsv("\t", allStatsFp).then(function(data) {
         quranRanges = buildRanges(qTokensD);
         
 
-        // create the sura scatter plot
-        buildSuraLevelViz();
-
-        repeatedNgramsReady = d3.json("resources/first_repeated_quran_ngrams.json").then(data => {
+        repeatedNgramsReady = repeatedJsonPromise.then(data => {
             repeatedNgramsD = data["data"];
             repeatedLookupD = buildRepeatedLookup(repeatedNgramsD);
         });
-        // "all locations" is the default: the graphs are drawn again when the counts are ready
+        // "all locations" is the default: the graphs are drawn when the counts are ready
         updateData();
 
+    }).catch(error => {
+        console.error(error);
+        d3.select("#locationsStatus").text("The data could not be loaded.");
     });
-});
+}

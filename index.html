@@ -265,6 +265,15 @@
             <span id="frequentStatus" class="toolbar-label"></span>
         </div>
 
+        <div class="radio-toolbar" id="ellipsisToggle" title="In an elliptical quotation (for example 'from ... to ...' or '... etc.'), the text only indicates the words in between or after: they are not cited. Ignore: count only the words that are cited (this needs data of 2026 or later)">
+            <span class="toolbar-label">Ellipses:</span>
+            <input type="radio" id="includeEllipsisBtn" name="ellipsis" value="include" checked>
+            <label for="includeEllipsisBtn">count implied words</label>
+
+            <input type="radio" id="ignoreEllipsisBtn" name="ellipsis" value="ignore">
+            <label for="ignoreEllipsisBtn">ignore implied words</label>
+        </div>
+
         <div class="radio-toolbar" id="compareToggle" title="Divide the graphs: the heat map gets a row for each century, the bars are stacked by century">
             <span class="toolbar-label">Compare by:</span>
             <input type="checkbox" id="compareCentury">
