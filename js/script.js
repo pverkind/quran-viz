@@ -91,6 +91,7 @@ function resetFilters(){
 function removeAllGraphs(){
     d3.selectAll("#plotToggle, #compareToggle, #numbersToggle, #locationsToggle").classed("disabled", tableVizBtn.checked);   // (bar plot or heat map: not for the table)
     d3.selectAll("#scatter1 svg, #scatter2 svg, .nodata").remove();
+    verseSelectors = {};
     d3.select("#ayaTextDiv").html("");
     currentAyaKey = null;
     heatmapVerse = null;
@@ -636,6 +637,27 @@ function createScatterPlot(container, data, xVar, yVar, title, sura, width) {
         position = d => [d.colId * columnWidth + columnWidth / 2, 12];
     }
 
+    // (for the buttons "previous" and "next" verse: mark the sura or verse in this graph, see goToVerse)
+    verseSelectors[container] = suraAya => {
+        const [s, a] = suraAya.split(".").map(Number);
+        let pos;
+        if (isSuraPlot) {
+            pos = s;
+        } else if (container === "#scatter2") {
+            pos = (s === sura) ? a : null;
+        } else {
+            pos = ayaTokenIndexD[suraAya];
+        }
+        const d = pos === null ? undefined
+            : heat ? svg.selectAll(".hitcol").data().find(c => c.colId === binOf(pos))
+                   : barData.find(e => e[xVar] === pos);
+        if (d) {
+            highlight(d);
+        } else if (!isSuraPlot) {
+            highlightedVerse = suraAya;   // (nothing to mark: the verse has no data)
+        }
+    };
+
     // The mouse handlers are shared by the dots and by the (wide, invisible) lines of the bars,
     // so that a bar can be selected by hovering over it or clicking on it, not only its top.
     // Hovering is disabled after a click on a bar (until the user clicks in the graph):
@@ -1135,9 +1157,43 @@ function showAya(suraAya) {
     heatmapVerse = null;
     selectedWord = null;
     d3.select("#ayaTextDiv").html(
-        `<p>${suraAya}: ${verseTextHtml(suraAya)}</p>` +
+        verseBlockHtml(suraAya, `<p>${suraAya}: ${verseTextHtml(suraAya)}</p>`) +
         `<p dir="ltr" id="heatmapStatus"></p>`);
 }
+
+var verseSelectors = {};   // graph ("#scatter1", "#scatter2"): function that marks a sura or verse in the graph
+
+/* The verse in the middle, with the buttons for the previous and the next verse and the text of those verses (grey) */
+function verseBlockHtml(suraAya, currentHtml) {
+    const i = ayaTokenIndexD[suraAya] - 1;
+    const prev = ayaKeys[i - 1];
+    const next = ayaKeys[i + 1];
+    const neighbour = key => key ? `<p style="color: #999">${key}: ${ayaTextD[key]}</p>` : "";
+    // (the text is right to left: the arrow to the right means previous, the arrow to the left means next)
+    const button = (id, label, key) => `<button id="${id}" dir="ltr" data-verse="${key || ""}"${key ? "" : " disabled"}>${label}</button>`;
+    return `<p dir="rtl">${button("prevVerseBtn", "Previous verse &rarr;", prev)} ` +
+           `${button("nextVerseBtn", "&larr; Next verse", next)}</p>` +
+           neighbour(prev) + currentHtml + neighbour(next);
+}
+
+/* Go to a verse (the buttons for the previous and the next verse): like a click on the verse in the graph */
+function goToVerse(suraAya) {
+    const sura = +suraAya.split(".")[0];
+    if (suraVizBtn.checked && verseSura !== sura) {
+        filterScatter2({sura});   // (the verses of the sura of the new verse)
+    }
+    heatmapLocked = true;
+    Object.values(verseSelectors).forEach(select => select(suraAya));
+    showAyaHeatMap(suraAya);
+    showQuotationsOf("verse", suraAya);
+}
+
+d3.select("#ayaTextDiv").on("click.verseButtons", event => {
+    const button = event.target.closest("#prevVerseBtn, #nextVerseBtn");
+    if (button && button.dataset.verse) {
+        goToVerse(button.dataset.verse);
+    }
+});
 
 /* Show the verse with each word coloured by the number of quotations that contain the word
 
@@ -1410,18 +1466,20 @@ function formatAyaHeatMap(suraAya, rows) {
     const counts = tokenCounts(rows, ayaTokens.length, NGRAM_LENGTH_OFFSET);
     const [min, max] = d3.extent(counts);
     if (max === 0) {
-        return `<p>${suraAya}: ${verseTextHtml(suraAya)}</p><p dir="ltr">There are no citations of this verse that agree with the filters.</p>`;
+        return verseBlockHtml(suraAya, `<p>${suraAya}: ${verseTextHtml(suraAya)}</p>`) + `<p dir="ltr">There are no citations of this verse that agree with the filters.</p>`;
     }
     const colorScale = (min === max)
         ? () => "orange"
         : d3.scaleLinear()
             .domain([min, (min + max) / 2, max])
             .range(["lightyellow", "orange", "purple"]);
-    let html = `<p>${suraAya}: `;
+    let current = `<p>${suraAya}: `;
     ayaTokens.forEach((token, i) => {
-        html += `<span data-word="${i + 1}" title="${wordTitle(counts[i], quotationsAtWord(rows, i + 1, NGRAM_LENGTH_OFFSET).length)}" style="direction: ltr; cursor: pointer; background-color: ${colorScale(counts[i])}">${markedWord(token, hits && hits.has(firstToken + i), false)} </span>`;
+        current += `<span data-word="${i + 1}" title="${wordTitle(counts[i], quotationsAtWord(rows, i + 1, NGRAM_LENGTH_OFFSET).length)}" style="direction: ltr; cursor: pointer; background-color: ${colorScale(counts[i])}">${markedWord(token, hits && hits.has(firstToken + i), false)} </span>`;
     });
-    html += `</p><p dir="ltr">Colour represents the number of citations that contain the word ` +
+    current += "</p>";
+    let html = verseBlockHtml(suraAya, current);
+    html += `<p dir="ltr">Colour represents the number of citations that contain the word ` +
             `(lightest: ${min}, darkest: ${max}; hover over a word to see the exact number).</p>` +
             `<p dir="ltr">Click on a word to see all quotations that contain it.</p>` +
             `<div id="wordDetails" dir="ltr"></div>`;
