@@ -264,10 +264,17 @@ function computeQdata(allLocations) {
     });
 }
 
+/* Show a message next to the settings for the locations; a message that ends with "..." (the data is loading)
+   also shows the spinner above the graphs */
+function setLoading(message) {
+    d3.select("#locationsStatus").text(message);
+    d3.select("#graphSpinner").style("display", message.endsWith("...") ? null : "none");
+}
+
 /* The user has changed the first location / all locations, or the search term: get the data and draw the graphs */
 function updateData() {
     const allLocations = document.getElementById("allLocationsBtn").checked;
-    const status = d3.select("#locationsStatus");
+    const status = {text: setLoading};
     const key = dataKey(allLocations);
     if (showsStatsFile(allLocations) && !qdata) {
         status.text("Loading the data of the first locations...");
@@ -1647,7 +1654,7 @@ if (document.getElementById("allLocationsBtn").checked) {
 } else {
     loadStats();
 }
-d3.select("#locationsStatus").text("Loading the data...");
+setLoading("Loading the data...");
 
 {
     quranTextPromise.then(function(qtext) {
@@ -1698,6 +1705,6 @@ d3.select("#locationsStatus").text("Loading the data...");
 
     }).catch(error => {
         console.error(error);
-        d3.select("#locationsStatus").text("The data could not be loaded.");
+        setLoading("The data could not be loaded.");
     });
 }
