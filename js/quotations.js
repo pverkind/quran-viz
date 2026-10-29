@@ -517,11 +517,31 @@ function parseMilestoneFile(raw) {
 
 /* A text of the milestones as plain text: with line breaks (and without the marks for the "#" of the OpenITI markup) */
 function cleanMilestoneText(text) {
-    return text.replace(/\(@@\)/g, "").replace(/\(@\)/g, "\n").replace(/[ \t]*\n[ \t\n]*/g, "\n");
+    return text.replace(/\(@@\)/g, "").replace(/\(@\)/g, "\n").replace(/[ \t]*\n[ \t\n]*/g, "\n")
+        .replace(/@QB@\d*@?/g, "{").replace(/@QE@\d*@?/g, "}");   // (the markup for the begin and the end of a Qurʾān quotation, sometimes with a number)
 }
 
 function escapeHtml(text) {
     return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+// the size of a heading (the number of pipes: 1 = h1, 2 = h2, ...) as a multiple of the size of the text:
+const HEADING_SIZES = [1.5, 1.3, 1.15, 1.05];
+
+/* A cleaned text of the milestones (see cleanMilestoneText) as html:
+   a line that starts with pipes is a heading (1 pipe: h1, 2 pipes: h2, ...: bold and larger, without the pipes),
+   the page numbers (PageV01P119) are smaller and grey, the line breaks are kept */
+function formatContextHtml(text) {
+    return text.split("\n").map(line => {
+        const html = escapeHtml(line).replace(/Page(Beg|End)?V(\d+)P(\d+)/g, (page, position, volume, number) =>
+            `<span title="${position === "Beg" ? "Beginning" : "End"} of Volume ${+volume} Page ${+number}" style="font-size: 0.6em; color: #999">${page}</span>`);
+        const heading = /^\s*(\|+)\s*(.*)$/.exec(html);
+        if (!heading) {
+            return html;
+        }
+        const size = HEADING_SIZES[Math.min(heading[1].length, HEADING_SIZES.length) - 1];
+        return `<b style="font-size: ${size}em">${heading[2]}</b>`;
+    }).join("<br>");
 }
 
 /* The milestones do not have exactly 300 tokens each (a few have 299, 301 or 302), so the estimate of the milestone of a
@@ -727,6 +747,6 @@ if (typeof module !== "undefined" && module.exports) {
                       textKey, segmentOf, continuationSegments, resolveWholeQuotations,
                       quotationsAtWord, textsOfQuotation, countByVerse, parseImplicit, citedPieces, normaliseArabic, buildSearch, isExcludedQuotation,
                       textIdOfUri, milestoneOfToken, milestoneFileNumber, milestoneFileUrl, parseMilestoneFile,
-                      cleanMilestoneText, escapeHtml, alignCitation, contextAround, loadCitationContext, citationsOfText,
+                      cleanMilestoneText, escapeHtml, formatContextHtml, alignCitation, contextAround, loadCitationContext, citationsOfText,
                       borderShift, milestoneStart, exactMilestoneOfToken};
 }

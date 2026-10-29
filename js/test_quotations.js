@@ -810,3 +810,25 @@ test("matchesGenre: a text agrees if it has at least one of the chosen genres", 
     assert.ok(!matchesGenre("F", new Set(["NA"])));
     assert.ok(matchesGenre(undefined, new Set(["NA"])));          // (data without genres)
 });
+
+test("formatContextHtml: headings, small grey page numbers, line breaks", () => {
+    const {formatContextHtml} = require("./quotations.js");
+    assert.strictEqual(formatContextHtml("a\nb"), "a<br>b");
+    assert.strictEqual(formatContextHtml("| title"), '<b style="font-size: 1.5em">title</b>');
+    assert.strictEqual(formatContextHtml(" || title"), '<b style="font-size: 1.3em">title</b>');
+    assert.ok(formatContextHtml("||||||| deep").includes("font-size: 1.05em"));    // (more pipes than sizes)
+    assert.ok(!formatContextHtml("a | b").includes("<b"));                          // (a pipe inside a line is no heading)
+    assert.strictEqual(formatContextHtml("x PageV01P119 y"), 'x <span title="End of Volume 1 Page 119" style="font-size: 0.6em; color: #999">PageV01P119</span> y');
+    assert.strictEqual(formatContextHtml("<i>"), "&lt;i&gt;");                      // (the text is escaped)
+});
+
+test("cleanMilestoneText: the tags of the Qurʾān become braces (the digits after a tag are removed)", () => {
+    assert.strictEqual(cleanMilestoneText("x @QB@ a b @QE@ y @QB@12 c @QE@3 z"), "x { a b } y { c } z");
+});
+
+test("formatContextHtml: PageBegVxxPxxx and PageEndVxxPxxx are page numbers too", () => {
+    const {formatContextHtml} = require("./quotations.js");
+    const html = formatContextHtml("a PageBegV02P005 b PageEndV02P004 c");
+    assert.ok(html.includes('<span title="Beginning of Volume 2 Page 5" style="font-size: 0.6em; color: #999">PageBegV02P005</span>'));
+    assert.ok(html.includes('<span title="End of Volume 2 Page 4" style="font-size: 0.6em; color: #999">PageEndV02P004</span>'));
+});

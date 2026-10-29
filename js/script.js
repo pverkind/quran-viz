@@ -354,7 +354,7 @@ function drawFrequentPanel() {
                 if (this.checked) { frequentChoice.add(q.key); } else { frequentChoice.delete(q.key); }
                 markPending();
             });
-        row.append("td").attr("title", text).text(text.length > 90 ? text.slice(0, 90) + "..." : text);
+        row.append("td").attr("class", "arabic").attr("title", text).text(text.length > 90 ? text.slice(0, 90) + "..." : text);
         row.append("td").attr("dir", "ltr").text(q.count);
     });
 }
@@ -1076,7 +1076,7 @@ function renderQuotationTable(quotations, caption, verseHtml, textHtml){
     let table = '<table dir="rtl"><tr><th>Verse</th><th>Quoted Quran text</th><th>citations</th></tr>';
     top.forEach(arr => {
         table += "<tr>";
-        arr.forEach(el => table += `<td>${el}</td>`);
+        arr.forEach((el, i) => table += `<td${i === 1 ? ' class="arabic"' : ""}>${el}</td>`);   // (the second column is the quotation)
         table += "</tr>";
     });
     table += "</table>";
@@ -1312,7 +1312,7 @@ function showAyaHeatMap(suraAya) {
         d3.selectAll("#ayaTextDiv span[data-word]").on("click", function() {
             selectWord(+this.dataset.word);
         });
-        if (selectedWord && !d3.select("#wordDetails").empty()) {
+        if (selectedWord && !d3.select("#wordDetails").empty() && !d3.select(`#ayaTextDiv span[data-word="${selectedWord}"]`).empty()) {
             selectWord(selectedWord);   // (the filters have changed: the same word stays selected)
         }
     }).catch(error => {
@@ -1375,7 +1375,7 @@ function showQuotationTable(suraAya, rows, word, target) {
     quotations.slice(0, word === null ? 300 : undefined).forEach((q, i) => {
         const selectedToken = word === null ? null : quranRanges.verses[suraAya][0] + word - 1;
         html += `<tr class="quotationRow" data-i="${i}" style="cursor: pointer">` +
-                `<td>${quotationHtml(suraAya, q, selectedToken)}</td><td>${q.count}</td><td>${q.nTexts}</td></tr>`;
+                `<td class="arabic">${quotationHtml(suraAya, q, selectedToken)}</td><td>${q.count}</td><td>${q.nTexts}</td></tr>`;
     });
     html += '</table>';
     d3.select(target).html(html);
@@ -1455,9 +1455,14 @@ function loadMilestoneBorders() {
 
 /* Show a citation in its context (the words before and after it) in an element:
    textUri: the version URI of the text; citation: {start, end}, the first and the last token of the citation in the text;
-   q: the quotation (qstart and qend: its words in the Qurʾān, used to check that the right words are shown) */
-function showCitationContext(textUri, citation, q, element) {
+   q: the quotation (qstart and qend: its words in the Qurʾān, used to check that the right words are shown)
+   nWords: the number of words to show before and after the citation (the button "more context" adds CONTEXT_WORDS)
+   moreHost: the element (next to the link "show in context") that gets the button "more context" */
+function showCitationContext(textUri, citation, q, element, nWords = CONTEXT_WORDS, moreHost = element) {
     element.html("Loading the text...");
+    if (moreHost !== element) {
+        moreHost.html("");
+    }
     const quranWords = [];
     for (let i = q.qstart; i <= q.qend; i++) {
         quranWords.push(qTokensD[i][0]);
@@ -1466,21 +1471,25 @@ function showCitationContext(textUri, citation, q, element) {
     loadMilestoneBorders().then(borders => {
         // (a text that is not in the file has milestones of 300 tokens; without the file they are estimated)
         const shifts = borders ? (borders.data[textId] || []) : undefined;
-        return loadCitationContext(release, textId, citation.start, citation.end, CONTEXT_WORDS, CONTEXT_WORDS,
+        return loadCitationContext(release, textId, citation.start, citation.end, nWords, nWords,
                                    fetchMilestoneFile, quranWords, shifts);
     }).then(context => {
         if (!context) {
             element.html("This place was not found in the text of the milestones.");
             return;
         }
-        const paragraph = text => escapeHtml(text).replace(/\n/g, "<br>");
-        let html = `<div dir="rtl" style="font-size: 20px; line-height: 1.8">${paragraph(context.before)}` +
+        const paragraph = formatContextHtml;   // (headings, page numbers and line breaks)
+        let html = `<div dir="rtl" class="arabic" style="font-size: 22px; line-height: 1.8">${paragraph(context.before)}` +
                    `<mark>${paragraph(context.quote)}</mark>${paragraph(context.after)}</div>`;
         if (!context.matchesQuran) {
             html += '<p dir="ltr" style="color: #a00">Warning: the words of the Qurʾān are not (all) in the highlighted words. ' +
                     'The text of the milestones may differ from the text that was analysed.</p>';
         }
         element.html(html);
+        moreHost.append("button").attr("type", "button").attr("title", `show ${CONTEXT_WORDS} more words before and after the citation`)
+            .style("font-size", "12px").style("padding", "1px 8px").text("more context")
+            .style("margin-left", "10px")
+            .on("click", () => showCitationContext(textUri, citation, q, element, nWords + CONTEXT_WORDS, moreHost));
     }).catch(error => {
         console.error(error);
         element.html("The text could not be loaded (click again to try again).");
@@ -1498,8 +1507,9 @@ function showCitationsOfText(textUri, citations, q, cell) {
         const item = cell.append("div").style("margin-bottom", "8px");
         const link = item.append("a").attr("href", "#").style("cursor", "pointer")
             .text(`words ${c.start + 1}-${c.end + 1}: show in context`);
+        const more = item.append("span");   // (the button "more context" is next to the link)
         const context = item.append("div");
-        const show = () => showCitationContext(textUri, c, q, context);
+        const show = () => showCitationContext(textUri, c, q, context, CONTEXT_WORDS, more);
         link.on("click", event => {
             event.preventDefault();
             show();
@@ -1559,7 +1569,8 @@ function formatAyaHeatMap(suraAya, rows) {
     const hits = searchHits(...quranRanges.verses[suraAya]);   // (the words of the search term: bold and italic)
     const firstToken = quranRanges.verses[suraAya][0];
     const counts = tokenCounts(rows, ayaTokens.length, NGRAM_LENGTH_OFFSET);
-    const [min, max] = d3.extent(counts);
+    const max = d3.max(counts);
+    const min = d3.min(counts.filter(c => c > 0));   // (the words that are not cited have no colour)
     if (max === 0) {
         return verseBlockHtml(suraAya, `<p>${suraAya}: ${verseTextHtml(suraAya)}</p>`) + `<p dir="ltr">There are no citations of this verse that agree with the filters.</p>`;
     }
@@ -1570,7 +1581,12 @@ function formatAyaHeatMap(suraAya, rows) {
             .range(["lightyellow", "orange", "purple"]);
     let current = `<p>${suraAya}: `;
     ayaTokens.forEach((token, i) => {
-        current += `<span data-word="${i + 1}" title="${wordTitle(counts[i], quotationsAtWord(rows, i + 1, NGRAM_LENGTH_OFFSET).length)}" style="direction: ltr; cursor: pointer; background-color: ${colorScale(counts[i])}">${markedWord(token, hits && hits.has(firstToken + i), false)} </span>`;
+        const word = markedWord(token, hits && hits.has(firstToken + i), false);
+        if (counts[i] === 0) {
+            current += `<span title="this word is not part of any citation of this verse" style="direction: ltr">${word} </span>`;   // (not clickable)
+            return;
+        }
+        current += `<span data-word="${i + 1}" title="${wordTitle(counts[i], quotationsAtWord(rows, i + 1, NGRAM_LENGTH_OFFSET).length)}" style="direction: ltr; cursor: pointer; background-color: ${colorScale(counts[i])}">${word} </span>`;
     });
     current += "</p>";
     let html = verseBlockHtml(suraAya, current);

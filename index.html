@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Quran visualisation</title>
     <script src="js/d3.v7.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Amiri:ital,wght@0,400;0,700;1,400&display=swap">
     <style>
         :root {
             --accent: #2b5d8a;
@@ -12,6 +15,7 @@
             --border: #d5dbe1;
             --bg: #f4f6f8;
             --text: #222;
+            --arabic-font: "Amiri", "Traditional Arabic", "Scheherazade New", "Noto Naskh Arabic", "Times New Roman", serif;   /* (a classical naskh font) */
         }
         * { box-sizing: border-box; }
         body {
@@ -112,6 +116,8 @@
 
         /* the verse (and its heat map) and the tables */
         #ayaTextDiv { font-size: 26px; line-height: 2; }
+        /* the Arabic texts: the verses, the quotations and the context of the citations (not the English text) */
+        #ayaTextDiv p:not([dir="ltr"]), .arabic, #searchInput { font-family: var(--arabic-font); }
         #ayaTextDiv p, #table p { margin: 6px 0; }
         #ayaTextDiv p[dir="ltr"], #table p, #wordDetails { font-size: 15px; line-height: 1.4; }
         #table { font-size: 20px; }
