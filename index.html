@@ -84,6 +84,9 @@
             gap: 10px 24px;
             align-items: center;
         }
+        #genreToggle { grid-column: 1 / -1; flex-wrap: wrap; align-items: center; row-gap: 4px; }   /* (a whole row: it has 11 buttons) */
+        #genreToggle label { padding: 4px 16px; }   /* (lower than the other toolbars: it is one of the rows of filters) */
+        .filter-grid + .filter-grid { margin-top: 10px; }   /* (the same distance as between the rows of a grid) */
         .settings { display: flex; flex-wrap: wrap; gap: 14px 28px; margin-top: 14px; }
         .filter { display: flex; align-items: center; gap: 6px; }
         .filter-label { width: 110px; font-weight: 600; font-size: 14px; }
@@ -211,11 +214,8 @@
             <span class="greyed">to</span>
             <input type="text" id="lenInputMax" min="1" max="300" value="300">
         </div>
-        <div class="filter" title="Search a word or phrase in the Qurʾān (without vowels; a part of a word is found too): the graphs and tables show only the quotations that contain it">
-            <span class="filter-label">Search:</span>
-            <input type="text" id="searchInput" dir="rtl" placeholder="e.g. المستقيم" style="width: 170px; font-size: 16px">
-            <span id="searchStatus"></span>
-        </div>
+    </div>
+    <div class="filter-grid">
         <div class="filter">
             <span class="filter-label">Century:</span>
             <span>from</span>
@@ -229,6 +229,16 @@
             <input type="text" id="yearInputMin" min="1" max="1450" value="1">
             <span>to</span>
             <input type="text" id="yearInputMax" min="1" max="1450" value="1450">
+        </div>
+        <div class="filter" title="Search a word or phrase in the Qurʾān (without vowels; a part of a word is found too): the graphs and tables show only the quotations that contain it">
+            <span class="filter-label">Search:</span>
+            <input type="text" id="searchInput" dir="rtl" placeholder="e.g. المستقيم" style="width: 170px; font-size: 16px">
+            <span id="searchStatus"></span>
+        </div>
+    </div>
+    <div class="filter-grid">
+        <div class="radio-toolbar" id="genreToggle" style="display: none" title="Only the citations in texts of the chosen genres (a text can have more than one genre; nothing chosen: all texts). Experimental genre classification by Maxim Romanov. NA: no genre defined">
+            <span class="toolbar-label">Genre (any of):</span>
         </div>
         <div class="filter">
             <input id="resetFiltersBtn" type="button" value="Reset filters">
@@ -265,7 +275,7 @@
             <span id="frequentStatus" class="toolbar-label"></span>
         </div>
 
-        <div class="radio-toolbar" id="ellipsisToggle" title="In an elliptical quotation (for example 'from ... to ...' or '... etc.'), the text only indicates the words in between or after: they are not cited. Ignore: count only the words that are cited (this needs data of 2026 or later)">
+        <div class="radio-toolbar" id="ellipsisToggle" title="In an elliptical quotation (for example 'from ... to ...' or '... etc.'), the text only indicates the words in between or after: they are not cited. Ignore: count only the words that are cited.">
             <span class="toolbar-label">Ellipses:</span>
             <input type="radio" id="includeEllipsisBtn" name="ellipsis" value="include" checked>
             <label for="includeEllipsisBtn">count implied words</label>
@@ -280,7 +290,7 @@
             <label for="compareCentury">century</label>
 
             <input type="checkbox" id="compareGenre" disabled>
-            <label for="compareGenre" title="Not implemented yet">genre</label>
+            <label for="compareGenre" title="A row for each genre (a text of two genres is in both rows). Century and genre cannot be combined">genre</label>
         </div>
     </div>
     <div id="frequentPanel" class="frequent-panel" style="display: none"></div>

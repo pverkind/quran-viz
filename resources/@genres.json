@@ -1,0 +1,42 @@
+{
+ "L": {
+  "type": "balagha",
+  "label": "[L] linguistic (naḥw, balāġaŧ)"
+ },
+ "H": {
+  "type": "chronicles",
+  "label": "[H] historical (tawāriḫ)"
+ },
+ "F": {
+  "type": "fiqh",
+  "label": "[F] legal (fiqh)"
+ },
+ "G": {
+  "type": "greek",
+  "label": "[G] Graeco-Arabic (yūnānīyāt)"
+ },
+ "Ḥ": {
+  "type": "hadith",
+  "label": "[Ḥ] Tradition-based (ḥadīṯ)"
+ },
+ "K": {
+  "type": "kalam",
+  "label": "[K] “scholastic-theological” (kalām)"
+ },
+ "M": {
+  "type": "medicine",
+  "label": "[M] medical (ṭibb)"
+ },
+ "P": {
+  "type": "poetry",
+  "label": "[P] poetic (šiʿr)"
+ },
+ "E": {
+  "type": "tafsir",
+  "label": "[E] exegetical (tafsīr)"
+ },
+ "B": {
+  "type": "tarajim",
+  "label": "[B] biographical (tarājim)"
+ }
+}

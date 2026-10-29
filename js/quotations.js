@@ -707,8 +707,22 @@ function citationsOfText(rows, qstart, qend, textId) {
     return Array.from(places.values()).sort((a, b) => a.start - b.start);
 }
 
+/* Whether the genres of a text agree with the genre filter.
+   genre: the genre code of the text: the letters of its genres ("BH": biographical and historical), or "NA" if it is not known
+   selected: a Set of the letters that the user has chosen (and "NA" for the texts without genre); nothing chosen: all texts.
+   A text agrees if it has at least one of the chosen genres. */
+function matchesGenre(genre, selected) {
+    if (!selected || selected.size === 0) {
+        return true;
+    }
+    if (genre === "NA" || !genre) {
+        return selected.has("NA");
+    }
+    return Array.from(genre).some(letter => selected.has(letter));
+}
+
 if (typeof module !== "undefined" && module.exports) {
-    module.exports = {quotationKey, buildRepeatedLookup, canonicalKey, parseQuotationKey, mergeQuotations, tokenCounts,
+    module.exports = {matchesGenre,quotationKey, buildRepeatedLookup, canonicalKey, parseQuotationKey, mergeQuotations, tokenCounts,
                       buildRanges, appearancesOf, filterQuotationsByRange,
                       textKey, segmentOf, continuationSegments, resolveWholeQuotations,
                       quotationsAtWord, textsOfQuotation, countByVerse, parseImplicit, citedPieces, normaliseArabic, buildSearch, isExcludedQuotation,

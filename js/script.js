@@ -36,7 +36,13 @@ const resetBtn = document.getElementById("resetFiltersBtn");
 d3.select("#intro").text(`Explore verbatim citations of the Quran in the OpenITI corpus (release ${release.replaceAll("_", ".")}).`);
 resetBtn.addEventListener("click", resetFilters);
 d3.selectAll('input[name="plotType"]').on("change", () => updateVisuals());
-d3.select("#compareCentury").on("change", () => updateVisuals());
+// compare by century or by genre (one of them): by genre needs other counts (see computeQdata)
+d3.selectAll("#compareCentury, #compareGenre").on("change", function() {
+    if (this.checked) {
+        document.getElementById(this.id === "compareGenre" ? "compareCentury" : "compareGenre").checked = false;
+    }
+    updateData();
+});
 d3.selectAll('input[name="locations"]').on("change", () => updateData());
 d3.selectAll('input[name="frequent"]').on("change", frequentModeChanged);
 d3.selectAll('input[name="ellipsis"]').on("change", () => updateData());
@@ -84,6 +90,8 @@ function resetFilters(){
     document.getElementById("lenInputMin").value = 1;
     document.getElementById("lenInputMax").value = 300;
     document.getElementById("searchInput").value = "";
+    genreChoice.clear();
+    d3.selectAll("#genreToggle input").property("checked", false);
 
     applySearch()   // (draws the graphs again)
 }
@@ -138,8 +146,49 @@ function filterArray(data, ignore = {}) {
 
 /* The key of the data of the graphs (see computeQdata) */
 function dataKey(allLocations) {
-    return `${allLocations}|${search ? search.term : ""}|${excluded.size ? excludedVersion : ""}|${ignoreImplicit()}`;
+    return `${allLocations}|${search ? search.term : ""}|${excluded.size ? excludedVersion : ""}|${ignoreImplicit()}|${genreKey()}|${compareGenre()}`;
 }
+
+var genreChoice = new Set();   // the genres that the user has chosen (letters, and "NA"); empty: all texts
+var genreOrder = [];           // the genres (letters, and "NA") in the order of the buttons (see below)
+var genreNames = {};           // letter: the name of the genre ("[H] historical (tawāriḫ)": "historical")
+
+/* The name of a genre in the graphs (the letter if the names are not known) */
+function genreName(letter) {
+    return letter === "NA" ? "not known" : (genreNames[letter] || letter);
+}
+
+/* Whether the graphs compare the genres: the rows of the data then have a genre (see computeQdata) */
+function compareGenre() {
+    return document.getElementById("compareGenre").checked;
+}
+
+function genreKey() {
+    return Array.from(genreChoice).sort().join("");
+}
+
+/* Build the genre buttons from resources/@genres.json (the toolbar stays hidden if the file is not there) */
+d3.json("resources/@genres.json").then(genres => {
+    const toolbar = d3.select("#genreToggle");
+    const letters = Object.keys(genres).sort((a, b) => (a.charCodeAt(0) > 127) - (b.charCodeAt(0) > 127) || (a < b ? -1 : 1));
+    for (const letter of [...letters, "NA"]) {
+        const label = letter === "NA" ? "genre not known" : genres[letter].label;
+        const id = `genre${letters.indexOf(letter)}Btn`;
+        toolbar.append("input").attr("type", "checkbox").attr("id", id).attr("value", letter)
+            .on("change", function() {
+                if (this.checked) { genreChoice.add(letter); } else { genreChoice.delete(letter); }
+                updateData();
+            });
+        toolbar.append("label").attr("for", id).attr("title", label).text(letter);
+    }
+    toolbar.style("display", null);
+    genreOrder = [...letters, "NA"];
+    for (const letter of letters) {
+        // (without the letter and the Arabic term between brackets)
+        genreNames[letter] = genres[letter].label.replace(/^\[.+?\]\s*/, "").replace(/\s*\(.*\)\s*$/, "");
+    }
+    d3.select("#compareGenre").property("disabled", false);
+}).catch(() => console.warn("resources/@genres.json was not found: no genre filter."));
 
 /* Whether the words that an ellipsis only indicates (not cited in the text) are left out of the counts */
 function ignoreImplicit() {
@@ -148,7 +197,7 @@ function ignoreImplicit() {
 
 /* Whether the graphs show the stats file (the quotations at their first location, without any other settings) */
 function showsStatsFile(allLocations) {
-    return !allLocations && !search && excluded.size === 0 && !ignoreImplicit();
+    return !allLocations && !search && excluded.size === 0 && !ignoreImplicit() && genreChoice.size === 0 && !compareGenre();
 }
 
 /* The data of the graphs: the quotations at their first location in the Qurʾān (the stats file),
@@ -170,21 +219,45 @@ function computeQdata(allLocations) {
     const current = search;
     const excludedNow = excluded;
     const ignoreNow = ignoreImplicit();
+    const genreNow = new Set(genreChoice);
+    const byGenre = compareGenre();
     return Promise.all([loadNgrams(), repeatedNgramsReady]).then(([rows]) => {
         if (qdataCache.has(key)) {
             return;
         }
         let used = current ? rows.filter(d => current.contains(d.start_token, d.end_token)) : rows;
+        if (genreNow.size) {
+            used = used.filter(d => matchesGenre(d.genre, genreNow));
+        }
         if (excludedNow.size) {
             used = used.filter(d => !isExcludedQuotation(excludedNow, qTokensD, repeatedLookupD, d.start_token, d.end_token));
         }
-        const counts = countByVerse(used, qTokensD, qTokenIndexD, repeatedNgramsD, verseOfToken, allLocations, current, ignoreNow);
-        qdataCache.set(key, Array.from(counts, ([id, count]) => {
+        const toRows = (counts, genre) => Array.from(counts, ([id, count]) => {
             const year = Math.floor(id / 10000);
             const sura_aya = ayaKeys[id % 10000];
             const [sura, aya] = sura_aya.split(".");
-            return {century: Math.ceil(year / 100), year, sura: +sura, aya: +aya, sura_aya, count};
-        }));
+            return {century: Math.ceil(year / 100), year, sura: +sura, aya: +aya, sura_aya, count, genre};
+        });
+        const count = rowsToCount => countByVerse(rowsToCount, qTokensD, qTokenIndexD, repeatedNgramsD, verseOfToken, allLocations, current, ignoreNow);
+        if (!byGenre) {
+            qdataCache.set(key, toRows(count(used)));
+        } else {
+            // the rows of each genre: a text of several genres is in the rows of each of them
+            // (the chosen genres only, if the user has chosen some):
+            const ofGenre = new Map();
+            for (const d of used) {
+                const letters = (d.genre && d.genre !== "NA") ? Array.from(d.genre) : ["NA"];
+                for (const letter of letters) {
+                    if (genreNow.size === 0 || genreNow.has(letter)) {
+                        if (!ofGenre.has(letter)) {
+                            ofGenre.set(letter, []);
+                        }
+                        ofGenre.get(letter).push(d);
+                    }
+                }
+            }
+            qdataCache.set(key, Array.from(ofGenre, ([letter, genreRows]) => toRows(count(genreRows), letter)).flat());
+        }
         while (qdataCache.size > 3) {   // (keep the data of the last settings: it is big)
             qdataCache.delete(qdataCache.keys().next().value);
         }
@@ -248,15 +321,28 @@ function drawFrequentPanel() {
     const panel = d3.select("#frequentPanel");
     panel.html("");
     panel.append("p").attr("class", "frequent-intro")
-        .text(`The ${frequentList.length} most frequently cited quotations. A checked quotation is excluded from the graphs and tables:`);
+        .text(`The ${frequentList.length} most frequently cited quotations. A checked quotation is excluded from the graphs and tables (click on "apply" after you have changed the choice):`);
     const buttons = panel.append("p");
+    // (the graphs are only drawn again after a click on the button "apply": that takes a while)
+    const applyBtn = buttons.append("button").attr("type", "button").attr("id", "applyFrequentBtn").property("disabled", true)
+        .on("click", () => {
+            frequentChanged();
+            markPending();
+        });
+    // the choice has not been applied if it is not the same as the quotations that are excluded now:
+    const markPending = () => {
+        const pending = frequentChoice.size !== excluded.size || Array.from(frequentChoice).some(key => !excluded.has(key));
+        applyBtn.property("disabled", !pending).text(pending ? "apply (the choice has changed)" : "apply");
+    };
     const setAll = value => {
         frequentChoice = value ? new Set(frequentList.map(q => q.key)) : new Set();
         panel.selectAll("input.frequent-check").property("checked", value);
-        frequentChanged();
+        markPending();
     };
     buttons.append("button").attr("type", "button").text("check all").on("click", () => setAll(true));
     buttons.append("button").attr("type", "button").text("uncheck all").on("click", () => setAll(false));
+    applyBtn.text("apply");
+    buttons.node().append(applyBtn.node());   // (the button to apply is the last one)
     const table = panel.append("div").attr("class", "frequent-list").append("table").attr("dir", "rtl");
     frequentList.forEach(q => {
         const ngram = parseQuotationKey(q.key, qTokenIndexD);
@@ -266,7 +352,7 @@ function drawFrequentPanel() {
             .property("checked", frequentChoice.has(q.key))
             .on("change", function() {
                 if (this.checked) { frequentChoice.add(q.key); } else { frequentChoice.delete(q.key); }
-                frequentChanged();
+                markPending();
             });
         row.append("td").attr("title", text).text(text.length > 90 ? text.slice(0, 90) + "..." : text);
         row.append("td").attr("dir", "ltr").text(q.count);
@@ -375,6 +461,7 @@ function filterVerseRows(rows, suraAya) {
     const ignore = ignoreImplicit();
     return filterArray(rows, {sura: true, aya: true}).filter(d => d.total >= lenMin && d.total <= lenMax &&
         !(ignore && d.implicit === "1") &&   // (the words that an ellipsis only indicates)
+        matchesGenre(d.genre_id, genreChoice) &&
         (!search || termInVerse(d, suraAya)) &&
         !isExcludedQuotation(excluded, qTokensD, repeatedLookupD, d.qstart, d.qend));
 }
@@ -418,16 +505,20 @@ function createScatterPlot(container, data, xVar, yVar, title, sura, width) {
 
     // build the scatter plot:
     
-    // (compare by century: the heat map has a row for each century, the bars are stacked by century)
-    const compareByCentury = document.getElementById("compareCentury").checked;
+    // (compare by century or by genre: the heat map has a row for each century or genre, the bars are stacked by century or genre)
+    const compareByGenre = document.getElementById("compareGenre").checked;
+    const comparing = compareByGenre || document.getElementById("compareCentury").checked;
+    const rowKey = r => compareByGenre ? r.genre : r.century;   // (the row of a heat map or the panel of a bar plot of a row of the data)
+    const rowName = key => compareByGenre ? `genre: ${genreName(key)}` : `century ${key}`;
     const heatMap = document.getElementById("heatPlotBtn").checked;
-    // the centuries of the rows of a heat map or of the facets of a bar plot (without comparing: one row, one bar plot)
-    const centuries = compareByCentury ? (data.length ? d3.range(d3.min(data, r => r.century), d3.max(data, r => r.century) + 1) : [1]) : [0];
+    // the rows of a heat map or the facets of a bar plot (centuries or genres; without comparing: one row, one bar plot)
+    const centuries = compareByGenre ? genreOrder.filter(g => data.some(r => r.genre === g))
+        : comparing ? (data.length ? d3.range(d3.min(data, r => r.century), d3.max(data, r => r.century) + 1) : [1]) : [0];
     const panelHeight = 60;    // (compare by century: the height of the bar plot of a century and the space between them)
     const panelGap = 6;
-    const height = heatMap ? (compareByCentury ? 400 : 70)           // (a heat map with one row is not high)
-                           : (compareByCentury ? centuries.length * (panelHeight + panelGap) - panelGap : 400);
-    const margin = { top: 20, right: 20, bottom: 30, left: heatMap ? 40 : 60 };   // (the bars have long numbers on the y axis)
+    const height = heatMap ? (comparing ? 400 : 70)           // (a heat map with one row is not high)
+                           : (comparing ? centuries.length * (panelHeight + panelGap) - panelGap : 400);
+    const margin = { top: 20, right: 20, bottom: 30, left: heatMap ? (compareByGenre ? 150 : 40) : 60 };   // (a heat map by genre has the names of the genres)   // (the bars have long numbers on the y axis)
     
     // build the plot's canvas:
     const root = d3.select(container)
@@ -510,7 +601,7 @@ function createScatterPlot(container, data, xVar, yVar, title, sura, width) {
               .tickFormat(d3.format('d'))
             );
 
-        if (!compareByCentury) {
+        if (!comparing) {
             y = d3.scaleLinear()
                 .domain([0, d3.max(formattedData, d => d[yVar])])//.nice()
                 .range([height, 0]);
@@ -529,7 +620,7 @@ function createScatterPlot(container, data, xVar, yVar, title, sura, width) {
                   .attr("stroke", "blue")
         } else {
             // a bar plot for each century, above each other (the same y scale: the plots can be compared)
-            const byCentury = d3.rollup(data, v => d3.sum(v, valueOf), r => r.century, posOfRow);
+            const byCentury = d3.rollup(data, v => d3.sum(v, valueOf), rowKey, posOfRow);
             const maxCount = d3.max(Array.from(byCentury.values(), m => d3.max(m.values()))) || 1;
             y = d3.scaleLinear().domain([0, maxCount]).range([panelHeight, 0]);
             const barOf = new Map(formattedData.map(d => [d[xVar], d]));
@@ -539,7 +630,7 @@ function createScatterPlot(container, data, xVar, yVar, title, sura, width) {
                 const panel = svg.append("g").attr("transform", `translate(0,${panelTop(i)})`);
                 panel.append("rect").attr("width", width).attr("height", panelHeight).attr("fill", i % 2 ? "#fff" : "#f5f8fb");
                 panel.append("g").call(d3.axisLeft(y).ticks(3).tickFormat(relative ? fmt : d3.format("~s")));
-                panel.append("text").attr("x", 4).attr("y", 11).attr("font-size", 10).attr("fill", "#555").text(`century ${century}`);
+                panel.append("text").attr("x", 4).attr("y", 11).attr("font-size", 10).attr("fill", "#555").text(rowName(century));
                 for (const [pos, count] of byCentury.get(century) || []) {
                     barData.push({...barOf.get(pos), [yVar]: count, panel: i, century});
                     panel.append("line")
@@ -579,7 +670,7 @@ function createScatterPlot(container, data, xVar, yVar, title, sura, width) {
         // the number of quotations per column and century:
         // (only the centuries of the filtered data: the y axis follows the century and year filters)
         // (without "compare by century" there is one row)
-        const rowOf = compareByCentury ? (r => r.century) : (() => 0);
+        const rowOf = comparing ? rowKey : (() => 0);
         const cells = [];
         for (const [b, byCentury] of d3.rollup(data, v => d3.sum(v, r => r.count), r => binOf(posOfRow(r)), rowOf)) {
             for (const [century, count] of byCentury) {
@@ -594,10 +685,10 @@ function createScatterPlot(container, data, xVar, yVar, title, sura, width) {
         const yb = d3.scaleBand().domain(centuries).range([0, height]);
         svg.append("g").attr("transform", `translate(0,${height})`)
             .call(d3.axisBottom(xs).tickValues(xs.ticks().filter(Number.isInteger)).tickFormat(d3.format("d")));
-        if (compareByCentury) {
-            svg.append("g").call(d3.axisLeft(yb));
-            svg.append("text").attr("transform", "rotate(-90)").attr("x", -height / 2).attr("y", -30)
-                .attr("text-anchor", "middle").attr("font-size", 11).attr("fill", "#555").text("century");
+        if (comparing) {
+            svg.append("g").call(d3.axisLeft(yb).tickFormat(compareByGenre ? genreName : (k => k)));
+            svg.append("text").attr("transform", "rotate(-90)").attr("x", -height / 2).attr("y", compareByGenre ? -margin.left + 12 : -30)
+                .attr("text-anchor", "middle").attr("font-size", 11).attr("fill", "#555").text(compareByGenre ? "genre" : "century");
         }
 
         const label = d => {
@@ -613,7 +704,7 @@ function createScatterPlot(container, data, xVar, yVar, title, sura, width) {
             .attr("height", yb.bandwidth())
             .attr("fill", c => color(c.count))
             .style("pointer-events", "none")
-            .append("title").text(c => `${label(c.rep)}${compareByCentury ? `, century ${c.century}` : ""}: ${fmt(c.count)} ${relative ? "citations per word" : "citations"}`);
+            .append("title").text(c => `${label(c.rep)}${comparing ? `, ${rowName(c.century)}` : ""}: ${fmt(c.count)} ${relative ? "citations per word" : "citations"}`);
 
         // a legend in the top margin: the colour scale:
         const gradient = root.append("defs").append("linearGradient").attr("id", `legend-${container.slice(1)}`);
@@ -793,7 +884,7 @@ function createScatterPlot(container, data, xVar, yVar, title, sura, width) {
     }
 
     // add the title to the graph:
-    const aboveGraph = heat || compareByCentury;
+    const aboveGraph = heat || comparing;
     if (title == "Verses") {
         title = `Verses in sura ${sura} - ${SURA_NAMES[sura - 1]}`;
     }
@@ -850,7 +941,8 @@ function filterNgrams(data) {
         d.century >= centuryMin && d.century <= centuryMax &&
         d.year >= yearMin && d.year <= yearMax &&
         d.len >= lenMin && d.len <= lenMax &&
-        (!search || search.contains(d.start_token, d.end_token))
+        (!search || search.contains(d.start_token, d.end_token)) &&
+        matchesGenre(d.genre, genreChoice)
     );
 
     console.log("Number of rows after filtering: "+ filteredData.length);
@@ -1318,6 +1410,9 @@ function describeActiveFilters() {
         if (min.value !== min.defaultValue || max.value !== max.defaultValue) {
             parts.push(`${before}${min.value}-${max.value}${after}`);
         }
+    }
+    if (genreChoice.size) {
+        parts.push(`genre ${Array.from(genreChoice).join(" or ")}`);
     }
     if (search) {
         parts.push(`search "${document.getElementById("searchInput").value.trim()}"`);

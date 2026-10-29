@@ -795,3 +795,18 @@ test("the context of a citation with the shifts of the text: the exact place, wi
     assert.deepStrictEqual(requested, ["https://raw.githubusercontent.com/OpenITI/i.mech-20/v2023.1.8/data/X-ara1-00020"]);
     assert.deepStrictEqual(c.quoteTokens, fakeTokens.slice(400, 405));
 });
+
+test("matchesGenre: a text agrees if it has at least one of the chosen genres", () => {
+    const {matchesGenre} = require("./quotations.js");
+    assert.ok(matchesGenre("BH", new Set()));                      // (nothing chosen: all texts)
+    assert.ok(matchesGenre("NA", new Set()));
+    assert.ok(matchesGenre("BH", new Set(["H"])));
+    assert.ok(matchesGenre("BH", new Set(["F", "B"])));
+    assert.ok(!matchesGenre("BH", new Set(["F", "K"])));
+    assert.ok(matchesGenre("FḤ", new Set(["Ḥ"])));
+    assert.ok(!matchesGenre("FḤ", new Set(["H"])));               // (Ḥ is not H)
+    assert.ok(matchesGenre("NA", new Set(["NA"])));
+    assert.ok(!matchesGenre("NA", new Set(["F"])));
+    assert.ok(!matchesGenre("F", new Set(["NA"])));
+    assert.ok(matchesGenre(undefined, new Set(["NA"])));          // (data without genres)
+});
